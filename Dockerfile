@@ -11,11 +11,11 @@ COPY vimix-crm-backend/package*.json ./
 RUN npm install
 COPY vimix-crm-backend ./
 
-FROM nginx:alpine AS production
-COPY --from=frontend-builder /app/vimix-crm-frontend/dist /usr/share/nginx/html
-COPY --from=backend-builder /app/vimix-crm-backend/server.js /usr/src/app/server.js
-COPY --from=backend-builder /app/vimix-crm-backend/package*.json /usr/src/app/
+FROM node:20-alpine AS production
 WORKDIR /usr/src/app
+COPY --from=frontend-builder /app/vimix-crm-frontend/dist /usr/share/nginx/html
+COPY --from=backend-builder /app/vimix-crm-backend/server.js .
+COPY --from=backend-builder /app/vimix-crm-backend/package*.json ./
 RUN npm install --production
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
