@@ -18,6 +18,7 @@ COPY --from=frontend-builder /app/vimix-crm-frontend/dist /usr/share/nginx/html
 COPY --from=backend-builder /app/vimix-crm-backend /usr/src/app
 WORKDIR /usr/src/app
 
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY nginx.conf /etc/nginx/http.d/default.conf
 
 EXPOSE 80
