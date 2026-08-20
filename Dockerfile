@@ -18,6 +18,9 @@ COPY --from=backend-builder /app/vimix-crm-backend/server.js .
 COPY --from=backend-builder /app/vimix-crm-backend/package*.json ./
 RUN npm install --production
 
+# Install Nginx
+RUN apk add --no-cache nginx
+
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
