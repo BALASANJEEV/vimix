@@ -23,4 +23,4 @@ RUN npm install --production
 COPY nginx.conf /etc/nginx/http.d/default.conf
 
 EXPOSE 80
-CMD ["sh", "-c", "mkdir -p /run/nginx && node server.js & nginx -g 'daemon off;'"]
+CMD ["sh", "-c", "mkdir -p /run/nginx && node server.js & nginx -g 'daemon off;'" ]
