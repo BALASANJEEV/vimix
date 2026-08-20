@@ -8,7 +8,7 @@ on:
 env:
   AWS_REGION: ap-south-1
   ECR_REPOSITORY: vimix
-  INSTANCE_ID: i-01885beb88dd29b59
+  INSTANCE_ID: i-0ba57f546cfef4824
 
 jobs:
   deploy:
@@ -50,12 +50,12 @@ jobs:
         run: |
           set -e
           AWS_REGION="ap-south-1"
-          INSTANCE_ID="i-01885beb88dd29b59"
+          INSTANCE_ID="i-0ba57f546cfef4824"
           ECR_REGISTRY="${ECR_REGISTRY:-696434672023.dkr.ecr.ap-south-1.amazonaws.com}"
           REPO="vimix"
           SECRET_ID="deptic/vimix/secrets"
           FULL_IMAGE="$ECR_REGISTRY/$REPO:latest"
-          TARGET_PORT="3000"
+          TARGET_PORT="80"
 
           echo "==> Waiting for SSM agent on instance $INSTANCE_ID in $AWS_REGION..."
           PING="Offline"
