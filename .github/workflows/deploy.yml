@@ -8,7 +8,7 @@ on:
 env:
   AWS_REGION: ap-south-1
   ECR_REPOSITORY: vimix
-  INSTANCE_ID: i-065cead870bcc4bd2
+  INSTANCE_ID: i-01885beb88dd29b59
 
 jobs:
   deploy:
@@ -50,7 +50,7 @@ jobs:
         run: |
           set -e
           AWS_REGION="ap-south-1"
-          INSTANCE_ID="i-065cead870bcc4bd2"
+          INSTANCE_ID="i-01885beb88dd29b59"
           ECR_REGISTRY="${ECR_REGISTRY:-696434672023.dkr.ecr.ap-south-1.amazonaws.com}"
           REPO="vimix"
           SECRET_ID="deptic/vimix/secrets"
