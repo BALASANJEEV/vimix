@@ -1,55 +1,78 @@
-import { DataTypes } from "sequelize";
-import sequelize from "../config/database.js";
+import mongoose from 'mongoose';
 
-const PROJECT_STAGES = [
-  "enquiry",
-  "sow-provided",
-  "proposal-sent",
-  "negotiation",
-  "prototyping",
-  "signed-agreement",
-  "closed",
-  "deal-lost",
+export const PROJECT_STAGES = [
+  'enquiry',
+  'sow-provided',
+  'proposal-sent',
+  'negotiation',
+  'prototyping',
+  'signed-agreement',
+  'closed',
+  'deal-lost',
 ];
 
-const Client = sequelize.define(
-  "Client",
+const ClientSchema = new mongoose.Schema(
   {
-    id: {
-      type: DataTypes.UUID,
-      defaultValue: DataTypes.UUIDV4,
-      primaryKey: true,
+    name: {
+      type: String,
+      required: true,
+      trim: true,
     },
-    name: { type: DataTypes.STRING, allowNull: false },
     email: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      unique: true,
-      validate: { isEmail: true },
+      type: String,
+      required: true,
+      trim: true,
     },
-    phone: DataTypes.STRING,
-    company: DataTypes.STRING,
+    phone: {
+      type: String,
+      trim: true,
+    },
+    company: {
+      type: String,
+      trim: true,
+    },
     stage: {
-      type: DataTypes.ENUM(...PROJECT_STAGES),
-      defaultValue: "enquiry",
+      type: String,
+      enum: PROJECT_STAGES,
+      default: 'enquiry',
     },
-    notes: DataTypes.TEXT,
-    totalPayments: { type: DataTypes.FLOAT, defaultValue: 0 },
-    stageHistory: { type: DataTypes.JSONB, defaultValue: [] },
-    activityLog: { type: DataTypes.JSONB, defaultValue: [] },
-
-    // 🔹 Added fields to track who created this client
+    notes: {
+      type: String,
+    },
+    totalPayments: {
+      type: Number,
+      default: 0,
+    },
+    stageHistory: {
+      type: Array,
+      default: [],
+    },
+    activityLog: {
+      type: Array,
+      default: [],
+    },
     createdById: {
-      type: DataTypes.UUID,
+      type: String,
     },
     createdByRole: {
-      type: DataTypes.ENUM("admin", "partner"),
+      type: String,
+      enum: ['admin', 'partner'],
     },
   },
   {
-    tableName: "clients",
     timestamps: true,
+    toJSON: {
+      virtuals: true,
+      transform: (doc, ret) => {
+        ret.id = ret._id.toString();
+        delete ret._id;
+        delete ret.__v;
+        return ret;
+      },
+    },
   }
 );
+
+const Client = mongoose.models.Client || mongoose.model('Client', ClientSchema);
 
 export default Client;

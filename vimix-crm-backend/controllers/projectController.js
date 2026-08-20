@@ -1,8 +1,8 @@
-import Project from "../models/Project.js";
-import Client from "../models/Client.js";
-import Payment from "../models/Payment.js";
-import path from "path";
-import fs from "fs";
+import Project from '../models/Project.js';
+import Client from '../models/Client.js';
+import Payment from '../models/Payment.js';
+import path from 'path';
+import fs from 'fs';
 
 /** Create project */
 export const createProject = async (req, res) => {
@@ -12,7 +12,7 @@ export const createProject = async (req, res) => {
       clientId,
       title,
       service,
-      stage,
+      stage = 'enquiry',
       description,
       budget,
       deadline,
@@ -20,22 +20,22 @@ export const createProject = async (req, res) => {
       activityLog,
       documents,
       meetings,
-      priority,
+      priority = 'medium',
     } = req.body;
 
-    const client = await Client.findByPk(clientId);
-    if (!client) return res.status(404).json({ message: "Client not found" });
+    const client = await Client.findById(clientId);
+    if (!client) return res.status(404).json({ message: 'Client not found' });
 
     // Partner can only create projects for clients they created
-    if (role === "partner" && client.createdById !== userId) {
-      return res.status(403).json({ message: "Access denied" });
+    if (role === 'partner' && client.createdById && client.createdById !== userId) {
+      return res.status(403).json({ message: 'Access denied' });
     }
 
     const initialActivity = [
       ...(activityLog || []),
       {
         id: `${Date.now()}_activity`,
-        type: "project_created",
+        type: 'project_created',
         description: `Project "${title}" created`,
         timestamp: new Date().toISOString(),
         details: { clientId, title, stage, budget, priority },
@@ -44,25 +44,26 @@ export const createProject = async (req, res) => {
 
     const project = await Project.create({
       clientId,
+      partnerId: role === 'partner' ? userId : undefined,
       title,
       service,
       stage,
       description,
-      budget,
+      budget: budget || 0,
       deadline,
       stageHistory: stageHistory || [
-        { stage, date: new Date().toISOString().split("T")[0] },
+        { stage, date: new Date().toISOString().split('T')[0] },
       ],
       activityLog: initialActivity,
       documents: documents || {},
       meetings: meetings || [],
       totalPayments: 0,
-      priority: priority || "normal", // Default priority if not provided
+      priority: priority || 'medium',
     });
 
     res.status(201).json(project);
   } catch (err) {
-    console.error(err);
+    console.error('Create project error:', err);
     res.status(500).json({ message: err.message });
   }
 };
@@ -72,24 +73,40 @@ export const getAllProjects = async (req, res) => {
   try {
     const { id: userId, role } = req.user;
 
-    const whereClause = {};
-    if (role === "partner") {
-      // Only projects whose client was created by partner
-      whereClause["$client.createdById$"] = userId;
+    let filter = {};
+    if (role === 'partner') {
+      const partnerClients = await Client.find({ createdById: userId }, '_id');
+      const clientIds = partnerClients.map((c) => c._id.toString());
+      filter = {
+        $or: [{ clientId: { $in: clientIds } }, { partnerId: userId }],
+      };
     }
 
-    const projects = await Project.findAll({
-      include: [
-        { model: Client, as: "client" },
-        { model: Payment, as: "payments" },
-      ],
-      where: whereClause,
-      order: [["createdAt", "DESC"]],
+    const projects = await Project.find(filter).sort({ createdAt: -1 });
+
+    const clientIds = [...new Set(projects.map((p) => p.clientId).filter(Boolean))];
+    const clients = await Client.find({ _id: { $in: clientIds } });
+    const clientMap = new Map(clients.map((c) => [c.id, c.toJSON()]));
+
+    const projectIds = projects.map((p) => p.id);
+    const payments = await Payment.find({ projectId: { $in: projectIds } });
+    const paymentMap = new Map();
+    payments.forEach((pay) => {
+      const list = paymentMap.get(pay.projectId) || [];
+      list.push(pay.toJSON());
+      paymentMap.set(pay.projectId, list);
     });
 
-    res.json(projects);
+    const result = projects.map((p) => {
+      const json = p.toJSON();
+      json.client = clientMap.get(p.clientId) || null;
+      json.payments = paymentMap.get(p.id) || [];
+      return json;
+    });
+
+    res.json(result);
   } catch (err) {
-    console.error(err);
+    console.error('Get all projects error:', err);
     res.status(500).json({ message: err.message });
   }
 };
@@ -98,22 +115,29 @@ export const getAllProjects = async (req, res) => {
 export const getProjectById = async (req, res) => {
   try {
     const { id: userId, role } = req.user;
-    const project = await Project.findByPk(req.params.id, {
-      include: [
-        { model: Client, as: "client" },
-        { model: Payment, as: "payments" },
-      ],
-    });
+    const project = await Project.findById(req.params.id);
 
-    if (!project) return res.status(404).json({ message: "Project not found" });
+    if (!project) return res.status(404).json({ message: 'Project not found' });
 
-    if (role === "partner" && project.client.createdById !== userId) {
-      return res.status(403).json({ message: "Access denied" });
+    const client = await Client.findById(project.clientId);
+    if (
+      role === 'partner' &&
+      project.partnerId !== userId &&
+      client &&
+      client.createdById !== userId
+    ) {
+      return res.status(403).json({ message: 'Access denied' });
     }
 
-    res.json(project);
+    const payments = await Payment.find({ projectId: project.id });
+
+    const json = project.toJSON();
+    json.client = client ? client.toJSON() : null;
+    json.payments = payments.map((p) => p.toJSON());
+
+    res.json(json);
   } catch (err) {
-    console.error(err);
+    console.error('Get project error:', err);
     res.status(500).json({ message: err.message });
   }
 };
@@ -122,27 +146,28 @@ export const getProjectById = async (req, res) => {
 export const getProjectDetails = async (req, res) => {
   try {
     const { id: userId, role } = req.user;
-    const project = await Project.findByPk(req.params.id, {
-      include: [
-        { model: Client, as: "client" },
-        { model: Payment, as: "payments", order: [["createdAt", "DESC"]] },
-      ],
-    });
+    const project = await Project.findById(req.params.id);
 
-    if (!project) return res.status(404).json({ message: "Project not found" });
+    if (!project) return res.status(404).json({ message: 'Project not found' });
 
-    if (role === "partner" && project.client.createdById !== userId) {
-      return res.status(403).json({ message: "Access denied" });
+    const client = await Client.findById(project.clientId);
+    if (
+      role === 'partner' &&
+      project.partnerId !== userId &&
+      client &&
+      client.createdById !== userId
+    ) {
+      return res.status(403).json({ message: 'Access denied' });
     }
 
     res.json({
       project: project.toJSON(),
       documents: project.documents || {},
       activityLog: project.activityLog || [],
-      client: project.client || null,
+      client: client ? client.toJSON() : null,
     });
   } catch (err) {
-    console.error(err);
+    console.error('Get project details error:', err);
     res.status(500).json({ message: err.message });
   }
 };
@@ -153,18 +178,21 @@ export const updateProject = async (req, res) => {
     const { id: userId, role } = req.user;
     const { id } = req.params;
 
-    const project = await Project.findByPk(id, {
-      include: [{ model: Client, as: "client" }],
-    });
-    if (!project) return res.status(404).json({ message: "Project not found" });
+    const project = await Project.findById(id);
+    if (!project) return res.status(404).json({ message: 'Project not found' });
 
-    if (role === "partner" && project.client.createdById !== userId) {
-      return res.status(403).json({ message: "Access denied" });
+    const client = await Client.findById(project.clientId);
+    if (
+      role === 'partner' &&
+      project.partnerId !== userId &&
+      client &&
+      client.createdById !== userId
+    ) {
+      return res.status(403).json({ message: 'Access denied' });
     }
 
     const { stage, stageHistory, activityLog, priority, ...rest } = req.body;
 
-    // Update stageHistory if stage changed
     let updatedStageHistory = project.stageHistory || [];
     let updatedActivityLog = [...(project.activityLog || []), ...(activityLog || [])];
 
@@ -173,7 +201,7 @@ export const updateProject = async (req, res) => {
       updatedStageHistory.push({ stage, date: new Date().toISOString() });
       updatedActivityLog.push({
         id: `${Date.now()}_activity`,
-        type: "stage_changed",
+        type: 'stage_changed',
         description: `Stage changed to "${stage}"`,
         timestamp: new Date().toISOString(),
         details: { oldStage: project.stage, newStage: stage },
@@ -184,24 +212,24 @@ export const updateProject = async (req, res) => {
     if (priority && priority !== project.priority) {
       updatedActivityLog.push({
         id: `${Date.now()}_activity`,
-        type: "priority_changed",
+        type: 'priority_changed',
         description: `Priority changed to "${priority}"`,
         timestamp: new Date().toISOString(),
         details: { oldPriority: project.priority, newPriority: priority },
       });
     }
 
-    await project.update({
-      ...rest,
-      stage: stage || project.stage,
-      stageHistory: updatedStageHistory,
-      activityLog: updatedActivityLog,
-      priority: priority || project.priority,
-    });
+    Object.assign(project, rest);
+    if (stage) project.stage = stage;
+    if (priority) project.priority = priority;
+    project.stageHistory = updatedStageHistory;
+    project.activityLog = updatedActivityLog;
+
+    await project.save();
 
     res.json(project);
   } catch (err) {
-    console.error(err);
+    console.error('Update project error:', err);
     res.status(500).json({ message: err.message });
   }
 };
@@ -210,40 +238,38 @@ export const updateProject = async (req, res) => {
 export const deleteProject = async (req, res) => {
   try {
     const { id: userId, role } = req.user;
-    const project = await Project.findByPk(req.params.id, {
-      include: [{ model: Client, as: "client" }],
-    });
+    const project = await Project.findById(req.params.id);
 
-    if (!project) return res.status(404).json({ message: "Project not found" });
+    if (!project) return res.status(404).json({ message: 'Project not found' });
 
-    if (role === "partner" && project.client.createdById !== userId) {
-      return res.status(403).json({ message: "Access denied" });
+    const client = await Client.findById(project.clientId);
+    if (
+      role === 'partner' &&
+      project.partnerId !== userId &&
+      client &&
+      client.createdById !== userId
+    ) {
+      return res.status(403).json({ message: 'Access denied' });
     }
-
-    // Log deletion activity
-    const activityLog = project.activityLog || [];
-    activityLog.push({
-      id: `${Date.now()}_activity`,
-      type: "project_deleted",
-      description: `Project "${project.title}" deleted`,
-      timestamp: new Date().toISOString(),
-      details: { projectId: project.id },
-    });
 
     // Delete files if any
     if (project.documents) {
       Object.values(project.documents).forEach((doc) => {
-        const filePath = path.join(process.cwd(), doc.url);
-        fs.unlink(filePath, (err) => {
-          if (err) console.error("File deletion error:", err);
-        });
+        if (doc && doc.url) {
+          const filePath = path.join(process.cwd(), doc.url);
+          fs.unlink(filePath, (err) => {
+            if (err) console.error('File deletion error:', err);
+          });
+        }
       });
     }
 
-    await project.destroy();
-    res.json({ message: "Project deleted" });
+    await Project.findByIdAndDelete(req.params.id);
+    await Payment.deleteMany({ projectId: req.params.id });
+
+    res.json({ message: 'Project deleted' });
   } catch (err) {
-    console.error(err);
+    console.error('Delete project error:', err);
     res.status(500).json({ message: err.message });
   }
 };
@@ -255,22 +281,23 @@ export const updateProjectStage = async (req, res) => {
     const { stage } = req.body;
     const { id: userId, role } = req.user;
 
-    if (!stage) return res.status(400).json({ message: "Stage is required" });
+    if (!stage) return res.status(400).json({ message: 'Stage is required' });
 
-    const project = await Project.findByPk(id, {
-      include: [{ model: Client, as: "client" }],
-    });
-    if (!project) return res.status(404).json({ message: "Project not found" });
+    const project = await Project.findById(id);
+    if (!project) return res.status(404).json({ message: 'Project not found' });
 
-    // Allow partners to update only their own projects
-    if (role === "partner" && project.client.createdById !== userId) {
-      return res.status(403).json({ message: "Access denied" });
+    const client = await Client.findById(project.clientId);
+    if (
+      role === 'partner' &&
+      project.partnerId !== userId &&
+      client &&
+      client.createdById !== userId
+    ) {
+      return res.status(403).json({ message: 'Access denied' });
     }
 
-    // update stage
     project.stage = stage;
 
-    // update stage history
     const history = project.stageHistory || [];
     history.push({
       stage,
@@ -279,11 +306,10 @@ export const updateProjectStage = async (req, res) => {
     });
     project.stageHistory = history;
 
-    // Add activity log
     const activity = project.activityLog || [];
     activity.push({
       id: `${Date.now()}_activity`,
-      type: "stage_updated",
+      type: 'stage_updated',
       description: `Project stage updated to "${stage}"`,
       timestamp: new Date().toISOString(),
       details: { newStage: stage },
@@ -293,11 +319,10 @@ export const updateProjectStage = async (req, res) => {
     await project.save();
     res.json(project);
   } catch (err) {
-    console.error(err);
+    console.error('Update stage error:', err);
     res.status(500).json({ message: err.message });
   }
 };
-
 
 /** Upload project document */
 export const uploadProjectDocument = async (req, res) => {
@@ -307,29 +332,28 @@ export const uploadProjectDocument = async (req, res) => {
     const file = req.file;
     const { id: userId, role } = req.user;
 
-    if (!file) return res.status(400).json({ message: "No file uploaded" });
-    if (!docType)
-      return res.status(400).json({ message: "docType is required" });
+    if (!file) return res.status(400).json({ message: 'No file uploaded' });
+    if (!docType) return res.status(400).json({ message: 'docType is required' });
 
-    const project = await Project.findByPk(id, {
-      include: [{ model: Client, as: "client" }],
-    });
+    const project = await Project.findById(id);
+    if (!project) return res.status(404).json({ message: 'Project not found' });
 
-    if (!project) return res.status(404).json({ message: "Project not found" });
-
-    if (role === "partner" && project.client.createdById !== userId) {
-      return res.status(403).json({ message: "Access denied" });
+    const client = await Client.findById(project.clientId);
+    if (
+      role === 'partner' &&
+      project.partnerId !== userId &&
+      client &&
+      client.createdById !== userId
+    ) {
+      return res.status(403).json({ message: 'Access denied' });
     }
 
     const fileUrl = `/uploads/projects/${id}/${file.filename}`;
-
-    // Safely initialize JSON fields
-    const documents = project.documents || {};
-    const activity = project.activityLog || [];
+    const documents = { ...(project.documents || {}) };
+    const activity = [...(project.activityLog || [])];
 
     const isUpdate = !!documents[docType];
 
-    // Update document info
     documents[docType] = {
       name: file.originalname,
       uploadDate: new Date().toISOString(),
@@ -337,29 +361,28 @@ export const uploadProjectDocument = async (req, res) => {
       url: fileUrl,
     };
 
-    // Add to activity log
     activity.push({
       id: `${Date.now()}_activity`,
-      type: isUpdate ? "document_update" : "document_upload",
-      description: `${isUpdate ? "Updated" : "Uploaded"} ${docType}`,
+      type: isUpdate ? 'document_update' : 'document_upload',
+      description: `${isUpdate ? 'Updated' : 'Uploaded'} ${docType}`,
       timestamp: new Date().toISOString(),
       details: { documentType: docType, documentName: file.originalname },
     });
 
-    // Tell Sequelize these fields changed (important!)
-    project.set({ documents, activityLog: activity });
-    project.changed("documents", true);
-    project.changed("activityLog", true);
+    project.documents = documents;
+    project.activityLog = activity;
+    project.markModified('documents');
+    project.markModified('activityLog');
 
     await project.save();
 
     res.json({
-      message: "Document uploaded successfully",
+      message: 'Document uploaded successfully',
       documents: project.documents,
       activityLog: project.activityLog,
     });
   } catch (err) {
-    console.error("Upload error:", err);
+    console.error('Upload error:', err);
     res.status(500).json({ message: err.message });
   }
 };
@@ -370,37 +393,36 @@ export const deleteProjectDocument = async (req, res) => {
     const { id, docType } = req.params;
     const { id: userId, role } = req.user;
 
-    const project = await Project.findByPk(id, {
-      include: [{ model: Client, as: "client" }],
-    });
-    if (!project) return res.status(404).json({ message: "Project not found" });
+    const project = await Project.findById(id);
+    if (!project) return res.status(404).json({ message: 'Project not found' });
 
-    if (role === "partner" && project.client.createdById !== userId) {
-      return res.status(403).json({ message: "Access denied" });
+    const client = await Client.findById(project.clientId);
+    if (
+      role === 'partner' &&
+      project.partnerId !== userId &&
+      client &&
+      client.createdById !== userId
+    ) {
+      return res.status(403).json({ message: 'Access denied' });
     }
 
     const documents = { ...(project.documents || {}) };
     const existing = documents[docType];
-    if (!existing)
-      return res.status(404).json({ message: "Document not found" });
+    if (!existing) return res.status(404).json({ message: 'Document not found' });
 
-    // Delete file from local filesystem
-    const filePath = path.join(process.cwd(), existing.url); // ensure correct absolute path
-    fs.unlink(filePath, (err) => {
-      if (err) {
-        console.error("Failed to delete file:", err);
-      } else {
-        console.log("File deleted:", filePath);
-      }
-    });
+    if (existing.url) {
+      const filePath = path.join(process.cwd(), existing.url);
+      fs.unlink(filePath, (err) => {
+        if (err) console.error('Failed to delete file:', err);
+      });
+    }
 
-    // Remove from database
     delete documents[docType];
 
-    const activity = project.activityLog || [];
+    const activity = [...(project.activityLog || [])];
     activity.push({
       id: `${Date.now()}_activity`,
-      type: "document_delete",
+      type: 'document_delete',
       description: `Deleted ${docType}`,
       timestamp: new Date().toISOString(),
       details: { documentType: docType, documentName: existing.name },
@@ -408,6 +430,9 @@ export const deleteProjectDocument = async (req, res) => {
 
     project.documents = documents;
     project.activityLog = activity;
+    project.markModified('documents');
+    project.markModified('activityLog');
+
     await project.save();
 
     res.json({
@@ -427,28 +452,31 @@ export const addProjectMeeting = async (req, res) => {
     const { date, time, title, notes } = req.body;
     const { id: userId, role } = req.user;
 
-    if (!date || !time || !title)
-      return res
-        .status(400)
-        .json({ message: "date, time, and title are required" });
-
-    const project = await Project.findByPk(id, {
-      include: [{ model: Client, as: "client" }],
-    });
-    if (!project) return res.status(404).json({ message: "Project not found" });
-
-    if (role === "partner" && project.client.createdById !== userId) {
-      return res.status(403).json({ message: "Access denied" });
+    if (!date || !time || !title) {
+      return res.status(400).json({ message: 'date, time, and title are required' });
     }
 
-    const meetings = project.meetings || [];
+    const project = await Project.findById(id);
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+
+    const client = await Client.findById(project.clientId);
+    if (
+      role === 'partner' &&
+      project.partnerId !== userId &&
+      client &&
+      client.createdById !== userId
+    ) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    const meetings = [...(project.meetings || [])];
     const meeting = { id: `${Date.now()}`, date, time, title, notes };
     meetings.push(meeting);
 
-    const activity = project.activityLog || [];
+    const activity = [...(project.activityLog || [])];
     activity.push({
       id: `${Date.now()}_activity`,
-      type: "meeting_added",
+      type: 'meeting_added',
       description: `Meeting scheduled: ${title}`,
       timestamp: new Date().toISOString(),
       details: { meetingTitle: title, meetingDate: date, meetingTime: time },
@@ -456,11 +484,12 @@ export const addProjectMeeting = async (req, res) => {
 
     project.meetings = meetings;
     project.activityLog = activity;
+    project.markModified('meetings');
+    project.markModified('activityLog');
+
     await project.save();
 
-    res
-      .status(201)
-      .json({ meetings: project.meetings, activityLog: project.activityLog });
+    res.status(201).json({ meetings: project.meetings, activityLog: project.activityLog });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: err.message });

@@ -1,60 +1,83 @@
-import { DataTypes } from 'sequelize';
-import sequelize from '../config/database.js';
+import mongoose from 'mongoose';
 import Project from './Project.js';
 import Client from './Client.js';
 
-const Payment = sequelize.define('Payment', {
-  id: {
-    type: DataTypes.UUID,
-    defaultValue: DataTypes.UUIDV4,
-    primaryKey: true,
+const PaymentSchema = new mongoose.Schema(
+  {
+    amount: {
+      type: Number,
+      required: true,
+    },
+    date: {
+      type: Date,
+      default: Date.now,
+    },
+    description: {
+      type: String,
+    },
+    status: {
+      type: String,
+      enum: ['paid', 'pending', 'overdue'],
+      default: 'pending',
+    },
+    clientId: {
+      type: String,
+      ref: 'Client',
+      required: true,
+    },
+    projectId: {
+      type: String,
+      ref: 'Project',
+    },
+    clientName: {
+      type: String,
+    },
+    projectTitle: {
+      type: String,
+    },
   },
-  amount: { type: DataTypes.FLOAT, allowNull: false },
-  date:   { type: DataTypes.DATE,  defaultValue: DataTypes.NOW },
-  description: DataTypes.TEXT,
-  status: { type: DataTypes.ENUM('paid','pending','overdue'), defaultValue: 'pending' },
-
-  // for quick reporting without joins (optional)
-  clientName:  DataTypes.STRING,
-  projectTitle:DataTypes.STRING,
-}, {
-  tableName: 'payments',
-  timestamps: true,
-});
-
-// Associations
-Project.hasMany(Payment, { onDelete: 'CASCADE', foreignKey: 'projectId' });
-Payment.belongsTo(Project, { foreignKey: 'projectId' });
-
-Client.hasMany(Payment, { onDelete: 'CASCADE', foreignKey: 'clientId' });
-Payment.belongsTo(Client, { foreignKey: 'clientId' });
-
-const updateTotals = async (payment) => {
-  // Update Project totalPayments
-  if (payment.projectId) {
-    const total = await Payment.sum("amount", {
-      where: { projectId: payment.projectId, status: "paid" },
-    });
-    await Project.update(
-      { totalPayments: total || 0 },
-      { where: { id: payment.projectId } }
-    );
+  {
+    timestamps: true,
+    toJSON: {
+      virtuals: true,
+      transform: (doc, ret) => {
+        ret.id = ret._id.toString();
+        delete ret._id;
+        delete ret.__v;
+        return ret;
+      },
+    },
   }
+);
 
-  // Update Client totalPayments
-  if (payment.clientId) {
-    const total = await Payment.sum("amount", {
-      where: { clientId: payment.clientId, status: "paid" },
-    });
-    await Client.update(
-      { totalPayments: total || 0 },
-      { where: { id: payment.clientId } }
-    );
+export const updatePaymentTotals = async (clientId, projectId) => {
+  try {
+    if (projectId) {
+      const projectPayments = await Payment.find({ projectId, status: 'paid' });
+      const total = projectPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+      await Project.findByIdAndUpdate(projectId, { totalPayments: total });
+    }
+
+    if (clientId) {
+      const clientPayments = await Payment.find({ clientId, status: 'paid' });
+      const total = clientPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+      await Client.findByIdAndUpdate(clientId, { totalPayments: total });
+    }
+  } catch (err) {
+    console.error('Error updating payment totals:', err);
   }
 };
 
-Payment.afterCreate(updateTotals);
-Payment.afterUpdate(updateTotals);
-Payment.afterDestroy(updateTotals);
+PaymentSchema.post('save', async function (doc) {
+  await updatePaymentTotals(doc.clientId, doc.projectId);
+});
+
+PaymentSchema.post('findOneAndDelete', async function (doc) {
+  if (doc) {
+    await updatePaymentTotals(doc.clientId, doc.projectId);
+  }
+});
+
+const Payment = mongoose.models.Payment || mongoose.model('Payment', PaymentSchema);
 
 export default Payment;

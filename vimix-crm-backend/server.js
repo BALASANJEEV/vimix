@@ -5,19 +5,14 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
 
-import sequelize from './config/database.js';
+import { connectDB } from './config/database.js';
 import Admin from './models/Admin.js';
-import Client from './models/Client.js';
-import Project from './models/Project.js';
-import Payment from './models/Payment.js';
 
 import adminRoutes from './routes/adminRoute.js';
 import clientRoute from './routes/clientRoute.js';
 import projectRoute from './routes/projectRoute.js';
 import paymentRoute from './routes/paymentRoute.js';
 import partnerRoute from './routes/partnerRoute.js';
-
-import './models/associations.js';
 
 dotenv.config();
 
@@ -29,10 +24,11 @@ const __dirname = path.dirname(__filename);
 const PORT = process.env.PORT || 5000;
 
 /* ---------- Middleware ---------- */
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(
   cors({
-    origin: ['http://localhost:5173'],
+    origin: ['http://localhost:5173', 'http://localhost:9001', 'http://127.0.0.1:9001', 'http://127.0.0.1:5173'],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   })
@@ -47,42 +43,40 @@ app.use('/api/clients', clientRoute);
 app.use('/api/projects', projectRoute);
 app.use('/api/payments', paymentRoute);
 app.use('/api/partners', partnerRoute);
-// health already below
 
 app.get('/health', (req, res) => {
-  res.json({ message: 'Server is running!' });
+  res.json({ message: 'Server is running with MongoDB!' });
 });
 
 /* ---------- Database & Server Start ---------- */
 (async () => {
   try {
-    await sequelize.authenticate();
-    console.log('Database connection established');
+    await connectDB();
 
-    // Ensure tables exist and associations are applied
-    const syncOptions = sequelize.getDialect() === 'sqlite' ? undefined : { alter: true };
-    await sequelize.sync(syncOptions);
-
-    // Seed or reset the default local development admin user
+    // Seed default admin user if not exists
     const DEFAULT_ADMIN_USERNAME = 'nandhana@rapid24.ai';
     const DEFAULT_ADMIN_PASSWORD_HASH = '$2b$10$sKl7ALg8wLdSQLlc9IcXK.H4.QJnLpYArhgKWoPOahWn6PlzgS/s6';
 
-    const existingAdmin = await Admin.findOne({ where: { username: DEFAULT_ADMIN_USERNAME } });
+    const existingAdmin = await Admin.findOne({
+      $or: [{ username: DEFAULT_ADMIN_USERNAME }, { email: DEFAULT_ADMIN_USERNAME }],
+    });
+
     if (!existingAdmin) {
-      await Admin.create({ username: DEFAULT_ADMIN_USERNAME, email: DEFAULT_ADMIN_USERNAME, password: DEFAULT_ADMIN_PASSWORD_HASH });
-      console.log('Default local admin user created for development');
-    } else if (existingAdmin.password !== DEFAULT_ADMIN_PASSWORD_HASH) {
-      existingAdmin.password = DEFAULT_ADMIN_PASSWORD_HASH;
-      existingAdmin.email = DEFAULT_ADMIN_USERNAME;
-      await existingAdmin.save();
-      console.log('Local admin password reset to default development credentials');
+      await Admin.create({
+        username: DEFAULT_ADMIN_USERNAME,
+        email: DEFAULT_ADMIN_USERNAME,
+        name: 'Nandhana Admin',
+        password: DEFAULT_ADMIN_PASSWORD_HASH,
+        role: 'admin',
+      });
+      console.log('Default admin user seeded into MongoDB');
     }
 
     app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
+      console.log(`Server running on port ${PORT} with MongoDB`);
     });
   } catch (err) {
-    console.error('Unable to connect to the database:', err);
+    console.error('Unable to start the server:', err);
     process.exit(1);
   }
 })();

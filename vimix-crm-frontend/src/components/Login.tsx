@@ -3,7 +3,7 @@ import axios from 'axios';
 import { Eye, EyeOff } from 'lucide-react';
 import VimixDarkLogo from '../images/VimixDark.png';
 import VimixLightLogo from '../images/VimixLight.png';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { login } from '../services/apiClient';
 
 interface LoginProps {
@@ -169,6 +169,18 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   {isLoading ? 'Logging in…' : 'Log in'}
                 </button>
               </form>
+
+              <div className="mt-6 text-center border-t border-gray-100 pt-4">
+                <p className="text-sm text-gray-600">
+                  Don't have an account?{' '}
+                  <Link
+                    to="/signup"
+                    className="font-semibold text-blue-600 hover:text-purple-600 transition-colors"
+                  >
+                    Sign up here
+                  </Link>
+                </p>
+              </div>
             </div>
           </div>
         </div>

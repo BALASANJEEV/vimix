@@ -6,7 +6,6 @@ import Payment from '../models/Payment.js';
 export const createClient = async (req, res) => {
   try {
     const { id: userId, role } = req.user;
-
     const { id, ...clientData } = req.body;
 
     const client = await Client.create({
@@ -16,11 +15,11 @@ export const createClient = async (req, res) => {
     });
 
     res.status(201).json({
-      message: "Client created successfully",
+      message: 'Client created successfully',
       client,
     });
   } catch (err) {
-    console.error("Create client error:", err);
+    console.error('Create client error:', err);
     res.status(400).json({ message: err.message });
   }
 };
@@ -29,14 +28,9 @@ export const createClient = async (req, res) => {
 export const getClients = async (req, res) => {
   try {
     const { id: userId, role } = req.user;
+    const filter = role === 'partner' ? { createdById: userId } : {};
 
-    const whereClause = role === 'partner' ? { createdById: userId } : {};
-
-    const clients = await Client.findAll({
-      where: whereClause,
-      order: [['createdAt', 'DESC']]
-    });
-
+    const clients = await Client.find(filter).sort({ createdAt: -1 });
     res.json(clients);
   } catch (err) {
     console.error(err);
@@ -48,11 +42,11 @@ export const getClients = async (req, res) => {
 export const getClient = async (req, res) => {
   try {
     const { id: userId, role } = req.user;
-    const client = await Client.findByPk(req.params.id);
+    const client = await Client.findById(req.params.id);
 
     if (!client) return res.status(404).json({ message: 'Client not found' });
 
-    if (role === 'partner' && client.createdById !== userId) {
+    if (role === 'partner' && client.createdById && client.createdById !== userId) {
       return res.status(403).json({ message: 'Access denied' });
     }
 
@@ -67,14 +61,16 @@ export const getClient = async (req, res) => {
 export const updateClient = async (req, res) => {
   try {
     const { id: userId, role } = req.user;
-    const client = await Client.findByPk(req.params.id);
+    const client = await Client.findById(req.params.id);
     if (!client) return res.status(404).json({ message: 'Client not found' });
 
-    if (role === 'partner' && client.createdById !== userId) {
+    if (role === 'partner' && client.createdById && client.createdById !== userId) {
       return res.status(403).json({ message: 'Access denied' });
     }
 
-    await client.update(req.body);
+    Object.assign(client, req.body);
+    await client.save();
+
     res.json(client);
   } catch (err) {
     console.error(err);
@@ -86,14 +82,18 @@ export const updateClient = async (req, res) => {
 export const deleteClient = async (req, res) => {
   try {
     const { id: userId, role } = req.user;
-    const client = await Client.findByPk(req.params.id);
+    const client = await Client.findById(req.params.id);
     if (!client) return res.status(404).json({ message: 'Client not found' });
 
-    if (role === 'partner' && client.createdById !== userId) {
+    if (role === 'partner' && client.createdById && client.createdById !== userId) {
       return res.status(403).json({ message: 'Access denied' });
     }
 
-    await client.destroy();
+    await Client.findByIdAndDelete(req.params.id);
+    // Also remove associated projects and payments
+    await Project.deleteMany({ clientId: req.params.id });
+    await Payment.deleteMany({ clientId: req.params.id });
+
     res.json({ message: 'Client removed' });
   } catch (err) {
     console.error(err);
@@ -107,35 +107,20 @@ export const getClientDetails = async (req, res) => {
     const { id: userId, role } = req.user;
     const { id } = req.params;
 
-    const client = await Client.findByPk(id, {
-      include: [{
-        model: Project,
-        as: 'projects',
-        include: [{ model: Payment, as: 'payments' }],
-        order: [['createdAt', 'DESC']]
-      }]
-    });
-
+    const client = await Client.findById(id);
     if (!client) return res.status(404).json({ message: 'Client not found' });
 
-    if (role === 'partner' && client.createdById !== userId) {
+    if (role === 'partner' && client.createdById && client.createdById !== userId) {
       return res.status(403).json({ message: 'Access denied' });
     }
 
-    const projects = client.projects.map(p => {
-      const plain = p.toJSON();
-      delete plain.payments;
-      return plain;
-    });
-
-    const payments = client.projects.flatMap(p =>
-      p.payments ? p.payments.map(pay => pay.toJSON()) : []
-    );
+    const projects = await Project.find({ clientId: id }).sort({ createdAt: -1 });
+    const payments = await Payment.find({ clientId: id }).sort({ createdAt: -1 });
 
     res.json({
       client: client.toJSON(),
-      projects,
-      payments
+      projects: projects.map((p) => p.toJSON()),
+      payments: payments.map((pay) => pay.toJSON()),
     });
   } catch (err) {
     console.error(err);

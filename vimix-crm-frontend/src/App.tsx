@@ -6,6 +6,7 @@ import {
   useNavigate,
 } from "react-router-dom";
 import Login from "./components/Login";
+import Signup from "./components/Signup";
 import Navigation from "./components/Navigation";
 import Dashboard from "./components/Dashboard";
 import ProjectList from "./components/ProjectList";
@@ -143,7 +144,12 @@ function App() {
   };
 
   if (!isAuthenticated) {
-    return <Login onLogin={handleLoginSuccess} />;
+    return (
+      <Routes>
+        <Route path="/signup" element={<Signup onLogin={handleLoginSuccess} />} />
+        <Route path="*" element={<Login onLogin={handleLoginSuccess} />} />
+      </Routes>
+    );
   }
 
   return (

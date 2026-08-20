@@ -1,11 +1,22 @@
 import express from 'express';
-import { loginAdmin, createAdmin, getAllPartners, getPartnerById, createPartner, updatePartner, deletePartner } from '../controllers/adminController.js';
+import {
+  loginAdmin,
+  registerAdmin,
+  createAdmin,
+  getAllPartners,
+  getPartnerById,
+  createPartner,
+  updatePartner,
+  deletePartner,
+} from '../controllers/adminController.js';
 import { requireRole } from '../middleware/verifyPartner.js';
 
 const router = express.Router();
 
-// Public: login and create admin
+// Public auth endpoints
 router.post('/login', loginAdmin);
+router.post('/register', registerAdmin);
+router.post('/signup', registerAdmin);
 router.post('/create', createAdmin);
 
 // Admin-only partner management

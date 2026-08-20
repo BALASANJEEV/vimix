@@ -34,8 +34,9 @@ API.interceptors.request.use((config) => {
   return config;
 });
 
-// ----- Admins -----
+// ----- Admins / Auth -----
 export const login = (data: any) => API.post('/api/admin/login', data);
+export const signup = (data: any) => API.post('/api/admin/signup', data);
 
 // ----- Partners (admin-managed) -----
 export const getPartners = () => API.get('/api/admin/partners');
