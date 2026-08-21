@@ -47,3 +47,14 @@ jobs:
         run: |
           aws apprunner create-deployment --service-arn arn:aws:apprunner:ap-south-1:YOUR_ACCOUNT_ID:service/$APP_RUNNER_SERVICE_NAME \
           --source-configuration '{"ImageRepository":{"ImageIdentifier":"'$FULL_IMAGE:latest'","ImageRepositoryType":"ECR"}}'
+
+      - name: SSH to server and deploy
+        uses: appleboy/ssh-action@v0.1.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd $DEPLOY_PATH
+            docker pull "$FULL_IMAGE:latest"
+            docker-compose up -d
