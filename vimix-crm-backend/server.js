@@ -80,3 +80,64 @@ app.get('/health', (req, res) => {
     process.exit(1);
   }
 })();
+
+name: Build & Deploy to AWS App Runner
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-south-1
+  APP_RUNNER_SERVICE_NAME: vimix-app
+  ECR_REPOSITORY: vimix
+
+jobs:
+  deploy:
+    name: Build, Push and Deploy to App Runner
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push Docker image to ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          set -e
+          FULL_IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY"
+          echo "Building $FULL_IMAGE:latest"
+          docker build --tag "$FULL_IMAGE:$GITHUB_SHA" --tag "$FULL_IMAGE:latest" .
+          docker push "$FULL_IMAGE:$GITHUB_SHA"
+          docker push "$FULL_IMAGE:latest"
+          echo "full_image=$FULL_IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to AWS App Runner
+        run: |
+          aws apprunner start-deployment --service-arn arn:aws:apprunner:ap-south-1:YOUR_ACCOUNT_ID:service/$APP_RUNNER_SERVICE_NAME \
+          --source-configuration '{"ImageRepository":{"ImageIdentifier":"'$FULL_IMAGE:latest'","ImageRepositoryType":"ECR"}}'
+
+      - name: SSH to server and deploy
+        uses: appleboy/ssh-action@v0.1.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd $DEPLOY_PATH
+            docker pull "$FULL_IMAGE:latest"
+            docker-compose up -d
