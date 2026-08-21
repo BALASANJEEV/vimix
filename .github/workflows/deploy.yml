@@ -45,7 +45,7 @@ jobs:
 
       - name: Deploy to AWS App Runner
         run: |
-          aws apprunner create-deployment --service-arn arn:aws:apprunner:ap-south-1:YOUR_ACCOUNT_ID:service/$APP_RUNNER_SERVICE_NAME \
+          aws apprunner start-deployment --service-arn arn:aws:apprunner:ap-south-1:YOUR_ACCOUNT_ID:service/$APP_RUNNER_SERVICE_NAME \
           --source-configuration '{"ImageRepository":{"ImageIdentifier":"'$FULL_IMAGE:latest'","ImageRepositoryType":"ECR"}}'
 
       - name: SSH to server and deploy
