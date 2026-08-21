@@ -1,4 +1,4 @@
-name: Build & Deploy to AWS
+name: Build & Deploy to AWS App Runner
 
 on:
   push:
@@ -7,11 +7,12 @@ on:
 
 env:
   AWS_REGION: ap-south-1
+  APP_RUNNER_SERVICE_NAME: vimix-app
   ECR_REPOSITORY: vimix
 
 jobs:
   deploy:
-    name: Build, Push and Deploy
+    name: Build, Push and Deploy to App Runner
     runs-on: ubuntu-latest
 
     steps:
@@ -46,7 +47,6 @@ jobs:
         run: |
           aws s3 sync ./frontend s3://your-s3-bucket-name --delete
 
-      - name: Deploy backend to AWS Lambda
+      - name: Deploy backend to AWS App Runner
         run: |
-          zip -r function.zip ./backend
-          aws lambda update-function-code --function-name your-lambda-function-name --zip-file fileb://function.zip
+          aws apprunner update-service --service-name $APP_RUNNER_SERVICE_NAME --source-configuration ImageRepository={ImageIdentifier=$FULL_IMAGE:latest,ImageRepositoryType=ECR}
