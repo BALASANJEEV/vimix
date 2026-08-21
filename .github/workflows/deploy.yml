@@ -1,4 +1,4 @@
-name: Build & Deploy to AWS S3 and Lambda
+name: Build & Deploy to AWS App Runner
 
 on:
   push:
@@ -7,12 +7,12 @@ on:
 
 env:
   AWS_REGION: ap-south-1
-  S3_BUCKET: your-s3-bucket-name
-  LAMBDA_FUNCTION_NAME: your-lambda-function-name
+  APP_RUNNER_SERVICE_NAME: vimix-app
+  ECR_REPOSITORY: vimix
 
 jobs:
   deploy:
-    name: Build, Push and Deploy to S3 and Lambda
+    name: Build, Push and Deploy to App Runner
     runs-on: ubuntu-latest
 
     steps:
@@ -26,22 +26,35 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ap-south-1
 
-      - name: Build frontend
-        run: |
-          npm install
-          npm run build
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Deploy frontend to S3
+      - name: Build, tag, and push Docker image to ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          aws s3 sync ./build s3://$S3_BUCKET --delete
+          set -e
+          FULL_IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY"
+          echo "Building $FULL_IMAGE:latest"
+          docker build --tag "$FULL_IMAGE:$GITHUB_SHA" --tag "$FULL_IMAGE:latest" .
+          docker push "$FULL_IMAGE:$GITHUB_SHA"
+          docker push "$FULL_IMAGE:latest"
+          echo "full_image=$FULL_IMAGE" >> "$GITHUB_OUTPUT"
 
-      - name: Build backend
+      - name: Deploy to AWS App Runner
         run: |
-          cd backend
-          npm install
-          npm run build
+          aws apprunner start-deployment --service-arn arn:aws:apprunner:ap-south-1:YOUR_ACCOUNT_ID:service/$APP_RUNNER_SERVICE_NAME \
+          --source-configuration '{"ImageRepository":{"ImageIdentifier":"'$FULL_IMAGE:latest'","ImageRepositoryType":"ECR"}}'
 
-      - name: Deploy backend to AWS Lambda
-        run: |
-          zip -r function.zip .
-          aws lambda update-function-code --function-name $LAMBDA_FUNCTION_NAME --zip-file fileb://function.zip
+      - name: SSH to server and deploy
+        uses: appleboy/ssh-action@v0.1.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd $DEPLOY_PATH
+            docker pull "$FULL_IMAGE:latest"
+            docker-compose up -d
