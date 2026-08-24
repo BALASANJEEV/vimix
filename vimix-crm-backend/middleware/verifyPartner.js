@@ -16,6 +16,9 @@ export const requireRole = (...allowedRoles) => (req, res, next) => {
     next();
   } catch (err) {
     console.error('Auth error:', err);
+    if (err && err.name === 'TokenExpiredError') {
+      return res.status(401).json({ message: 'Token expired, please log in again', code: 'TOKEN_EXPIRED' });
+    }
     return res.status(401).json({ message: 'Invalid token' });
   }
 };

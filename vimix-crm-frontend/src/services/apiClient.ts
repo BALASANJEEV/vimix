@@ -15,6 +15,15 @@ API.interceptors.response.use(
   (error: AxiosError) => {
     if (error.response) {
       console.error('API Error:', error.response.status, error.response.data);
+      // Auto‑logout on 401 Unauthorized (e.g., expired JWT)
+      if (error.response.status === 401) {
+        // Clear stored auth data
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('role');
+        localStorage.removeItem('name');
+        // Redirect to login page
+        window.location.href = '/login';
+      }
     } else if (error.request) {
       console.error('No response received from server:', error.request);
     } else {
