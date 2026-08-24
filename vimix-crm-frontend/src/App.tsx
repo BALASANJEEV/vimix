@@ -19,6 +19,7 @@ import ClientDetail from "./components/ClientDetail";
 import AddEditClient from "./components/AddEditClient";
 import PartnerList from "./components/PartnerList";
 import AddEditPartner from "./components/AddEditPartner";
+import Settings from "./components/Settings";
 import { Client, Project, Payment } from "./types/types";
 import apiClient from "./services/apiClient";
 function App() {
@@ -286,6 +287,12 @@ function App() {
                   onSave={handleSavePayment}
                 />
               }
+            />
+
+            {/* Settings */}
+            <Route
+              path="/settings"
+              element={<Settings />}
             />
 
             {/* Catch-all */}
