@@ -223,6 +223,7 @@ function App() {
               element={
                 <AddEditClient
                   clients={clients}
+                  projects={projects}
                   onSave={handleSaveClient}
                 />
               }
@@ -232,6 +233,7 @@ function App() {
               element={
                 <AddEditClient
                   clients={clients}
+                  projects={projects}
                   onSave={handleSaveClient}
                 />
               }
@@ -244,7 +246,6 @@ function App() {
                   projects={projects}
                   payments={payments}
                   onUpdateClient={handleSaveClient}
-                  onUpdateProject={handleSaveProject}
                 />
               }
             />
@@ -252,28 +253,51 @@ function App() {
             {/* Partners */}
             <Route
               path="/partners"
-              element={<PartnerList />}
+              element={
+                <PartnerList 
+                  partners={[]} 
+                  onUpdatePartner={handleSaveProject}
+                />
+              }
             />
             <Route
               path="/partners/add"
-              element={<AddEditPartner />}
+              element={
+                <AddEditPartner
+                  partners={[]} 
+                  onSave={handleSaveProject}
+                />
+              }
             />
             <Route
               path="/partners/edit/:id"
-              element={<AddEditPartner />}
+              element={
+                <AddEditPartner
+                  partners={[]} 
+                  onSave={handleSaveProject}
+                />
+              }
             />
 
             {/* Payments */}
             <Route
               path="/payments"
-              element={<PaymentList payments={payments} />}
+              element={
+                <PaymentList 
+                  payments={payments} 
+                  projects={projects} 
+                  clients={clients} 
+                  onUpdatePayment={handleSavePayment}
+                />
+              }
             />
             <Route
               path="/payments/add"
               element={
                 <AddPayment
-                  payments={payments}
-                  clients={clients}
+                  payments={payments} 
+                  projects={projects} 
+                  clients={clients} 
                   onSave={handleSavePayment}
                 />
               }
@@ -282,18 +306,20 @@ function App() {
               path="/payments/edit/:id"
               element={
                 <AddPayment
-                  payments={payments}
-                  clients={clients}
+                  payments={payments} 
+                  projects={projects} 
+                  clients={clients} 
                   onSave={handleSavePayment}
                 />
               }
             />
 
             {/* Settings */}
-            <Route path="/settings" element={<Settings />} />
+            <Route
+              path="/settings"
+              element={<Settings />}
+            />
 
-            {/* Catch-all */}
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </main>
       </div>
