@@ -53,5 +53,3 @@ router.post('/projects/:id/srs', requireRole, upload.single('file'), async (req,
 });
 
 export default router;
-
-
