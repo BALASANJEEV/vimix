@@ -26,9 +26,13 @@ API.interceptors.response.use(
 
 // Attach auth token (admin or partner) if available
 API.interceptors.request.use((config) => {
-  const token = localStorage.getItem('authToken');
+  // Tokens may be stored under different keys depending on the login flow
+  const token =
+    localStorage.getItem('authToken') ||
+    localStorage.getItem('partnerToken');
   if (token) {
     config.headers = config.headers || {};
+    // Ensure the header name is correctly cased for Node/Express
     (config.headers as any)['Authorization'] = `Bearer ${token}`;
   }
   return config;

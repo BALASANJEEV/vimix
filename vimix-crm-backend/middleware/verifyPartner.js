@@ -1,21 +1,44 @@
 import jwt from 'jsonwebtoken';
 
+/**
+ * Middleware to verify a JWT and optionally enforce allowed roles.
+ *
+ * - Uses `process.env.JWT_SECRET` if defined, otherwise falls back to a
+ *   hard‑coded development secret (`'default_secret'`).
+ * - Gracefully handles missing or malformed tokens, returning 401 with a
+ *   clear message.
+ * - If `allowedRoles` are provided, the decoded token's `role` must be one of
+ *   them; otherwise a 403 is returned. When no roles are supplied, any valid
+ *   token is accepted.
+ */
 export const requireRole = (...allowedRoles) => (req, res, next) => {
   try {
-    const hdr = req.headers.authorization || '';
-    const token = hdr.startsWith('Bearer ') ? hdr.slice(7) : null;
-    if (!token) return res.status(401).json({ message: 'Unauthorized' });
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+    if (!token) {
+      return res.status(401).json({ message: 'Unauthorized: token missing' });
+    }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    // Use fallback secret if JWT_SECRET is not set (useful for local dev)
+    const secret = process.env.JWT_SECRET || 'default_secret';
+    const decoded = jwt.verify(token, secret);
 
-    if (!allowedRoles.includes(decoded.role))
-      return res.status(403).json({ message: 'Forbidden' });
+    // If specific roles are required, enforce them
+    if (allowedRoles.length > 0 && !allowedRoles.includes(decoded.role)) {
+      return res.status(403).json({ message: 'Forbidden: insufficient role' });
+    }
 
-    // Attach user info to request
-    req.user = { id: decoded.id, role: decoded.role, username: decoded.username };
+    // Attach user info to request for downstream handlers
+    req.user = {
+      id: decoded.id,
+      role: decoded.role,
+      username: decoded.username,
+    };
     next();
   } catch (err) {
     console.error('Auth error:', err);
-    return res.status(401).json({ message: 'Invalid token' });
+    // Distinguish token expiration vs other verification errors when possible
+    const message = err.name === 'TokenExpiredError' ? 'Token expired' : 'Invalid token';
+    return res.status(401).json({ message });
   }
 };
