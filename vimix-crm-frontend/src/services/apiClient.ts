@@ -26,9 +26,11 @@ API.interceptors.response.use(
 
 // Attach auth token (admin or partner) if available
 API.interceptors.request.use((config) => {
-  const token = localStorage.getItem('authToken');
+  // The application may store the JWT under either 'authToken' or 'token'
+  const token = localStorage.getItem('authToken') || localStorage.getItem('token');
   if (token) {
     config.headers = config.headers || {};
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (config.headers as any)['Authorization'] = `Bearer ${token}`;
   }
   return config;
