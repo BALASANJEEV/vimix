@@ -1,6 +1,6 @@
 import axios, { AxiosError, AxiosResponse } from 'axios';
 
-// ✅ Create Axios instance with credentials enabled
+// 0 Create Axios instance with credentials enabled
 const API = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '',
   headers: {

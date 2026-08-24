@@ -6,7 +6,7 @@ export const requireRole = (...allowedRoles) => (req, res, next) => {
     const token = hdr.startsWith('Bearer ') ? hdr.slice(7) : null;
     if (!token) return res.status(401).json({ message: 'Unauthorized' });
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret');
 
     if (!allowedRoles.includes(decoded.role))
       return res.status(403).json({ message: 'Forbidden' });
