@@ -27,3 +27,57 @@ export const connectDB = async () => {
 };
 
 export default mongoose;
+
+// CI/CD Pipeline Configuration
+// This section is for GitHub Actions to automate the build and deployment process
+// File: .github/workflows/ci-cd-pipeline.yml
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '18'
+
+      - name: Install backend dependencies
+        working-directory: vimix-crm-backend
+        run: |
+          npm install
+
+      - name: Build backend
+        working-directory: vimix-crm-backend
+        run: |
+          npm run build
+
+      - name: Install frontend dependencies
+        working-directory: vimix-crm-frontend
+        run: |
+          npm install
+
+      - name: Build frontend
+        working-directory: vimix-crm-frontend
+        run: |
+          npm run build
+
+      - name: Deploy to server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            cd /path/to/deployment
+            docker-compose down
+            docker-compose up -d --build
