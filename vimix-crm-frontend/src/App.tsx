@@ -19,6 +19,7 @@ import ClientDetail from "./components/ClientDetail";
 import AddEditClient from "./components/AddEditClient";
 import PartnerList from "./components/PartnerList";
 import AddEditPartner from "./components/AddEditPartner";
+import Settings from "./components/Settings";
 import { Client, Project, Payment } from "./types/types";
 import apiClient from "./services/apiClient";
 function App() {
@@ -89,60 +90,6 @@ function App() {
     }
   }, [isAuthenticated]);
 
-  const handleSaveClient = (client: Client) => {
-    if (clients.some(c => c.id === client.id)) {
-      // Update existing client
-      setClients(clients.map(c => c.id === client.id ? client : c));
-    } else {
-      // Add new client
-      setClients([...clients, client]);
-    }
-  };
-
-  const handleSaveProject = (project: Project) => {
-    if (projects.some(p => p.id === project.id)) {
-      // Update existing project
-      setProjects(projects.map(p => p.id === project.id ? project : p));
-    } else {
-      // Add new project
-      setProjects([...projects, project]);
-    }
-  };
-
-  const handleSavePayment = (payment: Payment) => {
-    if (payments.some(p => p.id === payment.id)) {
-      // Update existing payment
-      setPayments(payments.map(p => p.id === payment.id ? payment : p));
-    } else {
-      // Add new payment
-      setPayments([...payments, payment]);
-      
-      // Update project total payments if payment has a projectId
-      if (payment.projectId) {
-        const project = projects.find(p => p.id === payment.projectId);
-        if (project) {
-          const updatedProject = {
-            ...project,
-            totalPayments: project.totalPayments + payment.amount
-          };
-          handleSaveProject(updatedProject);
-        }
-      }
-      
-      // Update client total payments
-      if (payment.clientId) {
-        const client = clients.find(c => c.id === payment.clientId);
-        if (client) {
-          const updatedClient = {
-            ...client,
-            totalPayments: client.totalPayments + payment.amount
-          };
-          handleSaveClient(updatedClient);
-        }
-      }
-    }
-  };
-
   if (!isAuthenticated) {
     return (
       <Routes>
@@ -158,138 +105,111 @@ function App() {
         <main className="max-w-7xl mx-auto p-4">
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
-
-            <Route
-              path="/dashboard"
-              element={<Dashboard projects={projects} payments={payments} />}
+            <Route path="/settings" element={<Settings />} />
+            <Route
+              path="/dashboard"
+              element={<Dashboard projects={projects} payments={payments} />}
             />
-
-            <Route
-              path="/projects"
-              element={
-                <ProjectList 
-                  projects={projects} 
-                  clients={clients} 
-                  onUpdateProject={handleSaveProject}
-                />
-              }
+            <Route
+              path="/projects"
+              element={
+                <ProjectList 
+                  projects={projects} 
+                  clients={clients} 
+                  onUpdateProject={handleSaveProject}
+                />
+              }
             />
-            <Route
-              path="/projects/add"
-              element={
-                <AddEditProject
-                  projects={projects}
-                  clients={clients}
-                  onSave={handleSaveProject}
-                />
-              }
+            <Route
+              path="/projects/add"
+              element={
+                <AddEditProject
+                  projects={projects}
+                  clients={clients}
+                  onSave={handleSaveProject}
+                />
+              }
             />
-            <Route
-              path="/projects/edit/:id"
-              element={
-                <AddEditProject
-                  projects={projects}
-                  clients={clients}
-                  onSave={handleSaveProject}
-                />
-              }
+            <Route
+              path="/projects/edit/:id"
+              element={
+                <AddEditProject
+                  projects={projects}
+                  clients={clients}
+                  onSave={handleSaveProject}
+                />
+              }
             />
-            <Route
-              path="/projects/:id"
-              element={
-                <ProjectDetail
-                  projects={projects}
-                  clients={clients}
-                  payments={payments}
-                  onUpdateProject={handleSaveProject}
-                />
-              }
+            <Route
+              path="/projects/:id"
+              element={
+                <ProjectDetail
+                  projects={projects}
+                  clients={clients}
+                  payments={payments}
+                  onUpdateProject={handleSaveProject}
+                />
+              }
             />
-
             {/* Clients */}
-            <Route
-              path="/clients"
-              element={
-                <ClientList 
-                  clients={clients} 
-                  projects={projects} 
-                  onUpdateClient={handleSaveClient}
-                />
-              }
+            <Route
+              path="/clients"
+              element={
+                <ClientList 
+                  clients={clients} 
+                  projects={projects} 
+                  onUpdateClient={handleSaveClient}
+                />
+              }
             />
-            <Route
-              path="/clients/add"
-              element={
-                <AddEditClient
-                  clients={clients}
-                  onSave={handleSaveClient}
-                />
-              }
+            <Route
+              path="/clients/add"
+              element={
+                <AddEditClient
+                  clients={clients}
+                  onSave={handleSaveClient}
+                />
+              }
             />
-            <Route
-              path="/clients/edit/:id"
-              element={
-                <AddEditClient
-                  clients={clients}
-                  onSave={handleSaveClient}
-                />
-              }
+            <Route
+              path="/clients/edit/:id"
+              element={
+                <AddEditClient
+                  clients={clients}
+                  onSave={handleSaveClient}
+                />
+              }
             />
-            <Route
-              path="/clients/:id"
-              element={
-                <ClientDetail
-                  clients={clients}
-                  projects={projects}
-                  payments={payments}
-                  onUpdateClient={handleSaveClient}
-                  onUpdateProject={handleSaveProject}
-                />
-              }
+            <Route
+              path="/clients/:id"
+              element={
+                <ClientDetail
+                  clients={clients}
+                  projects={projects}
+                  payments={payments}
+                  onUpdateClient={handleSaveClient}
+                  onUpdateProject={handleSaveProject}
+                />
+              }
             />
-
             {/* Partners */}
-            <Route
-              path="/partners"
-              element={<PartnerList />}
+            <Route
+              path="/partners"
+              element={<PartnerList />}
             />
-            <Route
-              path="/partners/add"
-              element={<AddEditPartner />}
+            <Route
+              path="/partners/add"
+              element={<AddEditPartner />}
             />
-            <Route
-              path="/partners/edit/:id"
-              element={<AddEditPartner />}
+            <Route
+              path="/partners/edit/:id"
+              element={<AddEditPartner />}
             />
-
             {/* Payments */}
-            <Route
-              path="/payments"
-              element={<PaymentList payments={payments} />}
+            <Route
+              path="/payments"
+              element={<PaymentList payments={payments} />}
             />
-            <Route
-              path="/payments/add"
-              element={
-                <AddPayment
-                  payments={payments}
-                  clients={clients}
-                  onSave={handleSavePayment}
-                />
-              }
-            />
-            <Route
-              path="/payments/edit/:id"
-              element={
-                <AddPayment
-                  payments={payments}
-                  clients={clients}
-                  onSave={handleSavePayment}
-                />
-              }
-            />
-
-            {/* Catch-all */}
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </main>
       </div>
