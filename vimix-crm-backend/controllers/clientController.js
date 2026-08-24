@@ -1,6 +1,7 @@
 import Client from '../models/Client.js';
 import Project from '../models/Project.js';
 import Payment from '../models/Payment.js';
+import redis from '../config/redis.js';
 
 /** Create a new client */
 export const createClient = async (req, res) => {
@@ -13,6 +14,9 @@ export const createClient = async (req, res) => {
       createdById: userId,
       createdByRole: role,
     });
+
+    // Invalidate cached client list
+    await redis.del('clients:all');
 
     res.status(201).json({
       message: 'Client created successfully',
@@ -27,10 +31,18 @@ export const createClient = async (req, res) => {
 /** Get all clients */
 export const getClients = async (req, res) => {
   try {
+    // Try cache first
+    const cached = await redis.get('clients:all');
+    if (cached) {
+      return res.json(JSON.parse(cached));
+    }
+
     const { id: userId, role } = req.user;
     const filter = role === 'partner' ? { createdById: userId } : {};
 
     const clients = await Client.find(filter).sort({ createdAt: -1 });
+    // Store in cache for 60 seconds
+    await redis.set('clients:all', JSON.stringify(clients), 60);
     res.json(clients);
   } catch (err) {
     console.error(err);
@@ -71,6 +83,9 @@ export const updateClient = async (req, res) => {
     Object.assign(client, req.body);
     await client.save();
 
+    // Invalidate cached client list
+    await redis.del('clients:all');
+
     res.json(client);
   } catch (err) {
     console.error(err);
@@ -93,6 +108,9 @@ export const deleteClient = async (req, res) => {
     // Also remove associated projects and payments
     await Project.deleteMany({ clientId: req.params.id });
     await Payment.deleteMany({ clientId: req.params.id });
+
+    // Invalidate cached client list
+    await redis.del('clients:all');
 
     res.json({ message: 'Client removed' });
   } catch (err) {

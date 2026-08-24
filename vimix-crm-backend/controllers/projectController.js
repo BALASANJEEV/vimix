@@ -3,6 +3,7 @@ import Client from '../models/Client.js';
 import Payment from '../models/Payment.js';
 import path from 'path';
 import fs from 'fs';
+import redis from '../config/redis.js';
 
 /** Create project */
 export const createProject = async (req, res) => {
@@ -61,6 +62,9 @@ export const createProject = async (req, res) => {
       priority: priority || 'medium',
     });
 
+    // Invalidate cached project list
+    await redis.del('projects:all');
+
     res.status(201).json(project);
   } catch (err) {
     console.error('Create project error:', err);
@@ -71,6 +75,12 @@ export const createProject = async (req, res) => {
 /** Get all projects */
 export const getAllProjects = async (req, res) => {
   try {
+    // Try cache first
+    const cached = await redis.get('projects:all');
+    if (cached) {
+      return res.json(JSON.parse(cached));
+    }
+
     const { id: userId, role } = req.user;
 
     let filter = {};
@@ -103,6 +113,9 @@ export const getAllProjects = async (req, res) => {
       json.payments = paymentMap.get(p.id) || [];
       return json;
     });
+
+    // Cache result for 60 seconds
+    await redis.set('projects:all', JSON.stringify(result), 60);
 
     res.json(result);
   } catch (err) {
@@ -227,6 +240,9 @@ export const updateProject = async (req, res) => {
 
     await project.save();
 
+    // Invalidate cached project list
+    await redis.del('projects:all');
+
     res.json(project);
   } catch (err) {
     console.error('Update project error:', err);
@@ -266,6 +282,9 @@ export const deleteProject = async (req, res) => {
 
     await Project.findByIdAndDelete(req.params.id);
     await Payment.deleteMany({ projectId: req.params.id });
+
+    // Invalidate cached project list
+    await redis.del('projects:all');
 
     res.json({ message: 'Project deleted' });
   } catch (err) {
@@ -317,6 +336,8 @@ export const updateProjectStage = async (req, res) => {
     project.activityLog = activity;
 
     await project.save();
+    // Invalidate cached project list
+    await redis.del('projects:all');
     res.json(project);
   } catch (err) {
     console.error('Update stage error:', err);
@@ -488,6 +509,9 @@ export const addProjectMeeting = async (req, res) => {
     project.markModified('activityLog');
 
     await project.save();
+
+    // Invalidate cached project list as meeting addition may affect list view
+    await redis.del('projects:all');
 
     res.status(201).json({ meetings: project.meetings, activityLog: project.activityLog });
   } catch (err) {
