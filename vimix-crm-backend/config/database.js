@@ -13,6 +13,26 @@ dotenv.config();
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://vimix:vimix@cluster0.vvgdhov.mongodb.net/vimix_crm?retryWrites=true&w=majority&appName=Cluster0';
 
+// Define a schema for the data
+const exampleSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+  },
+  email: {
+    type: String,
+    required: true,
+    unique: true,
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now,
+  },
+});
+
+// Create a model from the schema
+const ExampleModel = mongoose.model('Example', exampleSchema);
+
 export const connectDB = async () => {
   try {
     const conn = await mongoose.connect(MONGODB_URI, {
