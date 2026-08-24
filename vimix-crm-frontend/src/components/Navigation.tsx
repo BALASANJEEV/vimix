@@ -7,6 +7,7 @@ import {
   Menu,
   X,
   UserCheck,
+  Settings,
 } from "lucide-react";
 import VimixDarkLogo from "../images/VimixDark.png";
 import { Link, useLocation } from "react-router-dom";
@@ -31,6 +32,7 @@ const Navigation: React.FC<NavigationProps> = ({ onLogout }) => {
       : []),
     { path: "/projects", label: "Projects", icon: Users },
     { path: "/payments", label: "Payments", icon: CreditCard },
+    { path: "/settings", label: "Settings", icon: Settings },
   ];
 
   const isActivePath = (path: string) => {
