@@ -36,14 +36,6 @@ const PartnerSchema = new mongoose.Schema(
       type: String,
       default: 'partner',
     },
-    emailAlerts: {
-      type: Boolean,
-      default: false,
-    },
-    projectUpdates: {
-      type: Boolean,
-      default: false,
-    },
   },
   {
     timestamps: true,
