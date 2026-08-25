@@ -38,7 +38,6 @@ const Dashboard: React.FC = () => {
     };
     fetchData();
   }, []);
-  
 
   if (loading) return <div className="py-20 text-center">Loading dashboard…</div>;
 
@@ -90,9 +89,11 @@ const Dashboard: React.FC = () => {
 
   const handleViewProjects = () => navigate("/projects");
   const handleCreateProject = () => navigate("/projects/add");
+  const handleNewClient = () => navigate("/clients/add");
+  const handleAddPayment = () => navigate("/payments/add");
 
   return (
-    <div className=" my-20 p-6 space-y-6">
+    <div className="my-20 p-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -101,12 +102,26 @@ const Dashboard: React.FC = () => {
             Welcome back! Here's your business overview.
           </p>
         </div>
-        <button
-          onClick={handleViewProjects}
-          className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors"
-        >
-          View All Projects
-        </button>
+        <div className="flex space-x-2">
+          <button
+            onClick={handleNewClient}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            New Client
+          </button>
+          <button
+            onClick={handleAddPayment}
+            className="bg-yellow-600 text-white px-4 py-2 rounded-lg hover:bg-yellow-700 transition-colors"
+          >
+            Add Payment
+          </button>
+          <button
+            onClick={handleViewProjects}
+            className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors"
+          >
+            View All Projects
+          </button>
+        </div>
       </div>
 
       {/* Key Metrics */}
@@ -176,92 +191,68 @@ const Dashboard: React.FC = () => {
       </div>
 
       {/* Recent Projects */}
-      {/* Recent Projects */}
-<div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-  <div className="flex items-center justify-between mb-4">
-    <h2 className="text-xl font-semibold text-gray-900">Recent Projects</h2>
-    <button
-      onClick={handleViewProjects}
-      className="text-indigo-600 hover:text-indigo-700 text-sm font-medium"
-    >
-      View All
-    </button>
-  </div>
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold text-gray-900">Recent Projects</h2>
+          <button
+            onClick={handleViewProjects}
+            className="text-indigo-600 hover:text-indigo-700 text-sm font-medium"
+          >
+            View All
+          </button>
+        </div>
 
-  {recentProjects.length === 0 ? (
-    <div className="text-center py-8">
-      <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-      <p className="text-gray-500">No projects yet</p>
-      <button
-        onClick={handleCreateProject}
-        className="mt-2 text-indigo-600 hover:text-indigo-700 text-sm font-medium"
-      >
-        Create your first project
-      </button>
-    </div>
-  ) : (
-    <div className="overflow-x-auto">
-      <table className="min-w-full border border-gray-200 divide-y divide-gray-200 text-sm">
-        <thead className="bg-gray-50">
-          <tr>
-            <th className="px-4 py-2 text-left font-semibold text-gray-700">Details</th>
-            <th className="px-4 py-2 text-left font-semibold text-gray-700">Paid</th>
-            <th className="px-4 py-2 text-left font-semibold text-gray-700">Pending</th>
-            <th className="px-4 py-2 text-left font-semibold text-gray-700">Stage</th>
-            <th className="px-4 py-2 text-right font-semibold text-gray-700">Budget</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-100">
-          {recentProjects.map((project, i) => {
-            const projectPayments = payments.filter(p => p.projectId === project.id);
-            const paid = projectPayments
-              .filter(p => p.status === "paid")
-              .reduce((sum, p) => sum + p.amount, 0);
-            const pending = projectPayments
-              .filter(p => p.status === "pending")
-              .reduce((sum, p) => sum + p.amount, 0);
+        {recentProjects.length === 0 ? (
+          <div className="text-center py-8">
+            <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <p className="text-gray-500">No projects yet</p>
+            <button
+              onClick={handleCreateProject}
+              className="mt-2 text-indigo-600 hover:text-indigo-700 text-sm font-medium"
+            >
+              Create your first project
+            </button>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full border border-gray-200 divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-2 text-left font-semibold text-gray-700">Details</th>
+                  <th className="px-4 py-2 text-left font-semibold text-gray-700">Paid</th>
+                  <th className="px-4 py-2 text-left font-semibold text-gray-700">Pending</th>
+                  <th className="px-4 py-2 text-left font-semibold text-gray-700">Stage</th>
+                  <th className="px-4 py-2 text-right font-semibold text-gray-700">Budget</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {recentProjects.map((project, i) => {
+                  const projectPayments = payments.filter(p => p.projectId === project.id);
+                  const paid = projectPayments
+                    .filter(p => p.status === "paid")
+                    .reduce((sum, p) => sum + p.amount, 0);
+                  const pending = projectPayments
+                    .filter(p => p.status === "pending")
+                    .reduce((sum, p) => sum + p.amount, 0);
 
-            return (
-              <tr
-                key={i}
-                className="hover:bg-gray-50 transition cursor-pointer"
-                onClick={() => navigate(`/projects/${project.id}`)}
-              >
-                <td className="px-4 py-3">
-                  <div>
-                    <p className="font-medium text-gray-900">{project.title}</p>
-                    <p className="text-xs text-gray-500">
-                      {project.service} • {new Date(project.createdAt).toLocaleDateString()}
-                    </p>
-                  </div>
-                </td>
-                <td className="px-4 py-3 text-green-700 font-bold">
-                  ₹<FormatCash amount={paid} />
-                </td>
-                <td className="px-4 py-3 text-red-700 font-bold">
-                  ₹<FormatCash amount={pending} />
-                </td>
-                <td className="px-4 py-3">
-                  <span
-                    className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStageColor(
-                      project.stage
-                    )}`}
-                  >
-                    {project.stage.replace("-", " ")}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-right text-gray-900  font-bold">
-                  ₹<FormatCash amount={project.budget || 0} />
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  )}
-</div>
-
+                  return (
+                    <tr key={i} className="hover:bg-gray-50">
+                      <td className="px-4 py-2">
+                        <div className="font-medium">{project.name}</div>
+                        <div className="text-sm text-gray-500">{project.description}</div>
+                      </td>
+                      <td className="px-4 py-2">{formatCurrency(paid)}</td>
+                      <td className="px-4 py-2">{formatCurrency(pending)}</td>
+                      <td className="px-4 py-2">{project.stage}</td>
+                      <td className="px-4 py-2 text-right">{formatCurrency(project.budget)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
