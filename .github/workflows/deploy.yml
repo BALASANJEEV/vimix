@@ -1,113 +1,45 @@
-name: Deploy Vimix CRM to EC2 Docker
+name: Deploy Vimix CRM
 
 on:
   push:
-    branches: [main]
-  workflow_dispatch:
-
-env:
-  AWS_REGION: ap-south-1
-  ECR_REPOSITORY: vimix
-  ECR_REGISTRY: 759204735992.dkr.ecr.ap-south-1.amazonaws.com
-  EC2_INSTANCE_ID: i-05971fe003b4c9543
-  CONTAINER_PORT: 5000
-  PUBLIC_URL: http://15.206.235.119
-  SECRETS_ID: deptic/vimix/secrets
+    branches: [ main ]
 
 jobs:
   build-and-deploy:
-    name: Build, Push and Deploy
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-
+    runs-on: ubuntu-24.04
+    
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
         with:
-          role-to-assume: arn:aws:iam::759204735992:role/github-actions-ecr-ec2
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Fetch secrets from AWS Secrets Manager
-        id: fetch-secrets
-        run: |
-          echo "Fetching secrets from ${{ env.SECRETS_ID }}"
-          SECRETS=$(aws secretsmanager get-secret-value --secret-id ${{ env.SECRETS_ID }} --query SecretString --output text)
-          echo "$SECRETS" | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> $GITHUB_ENV
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+          images: ${{ secrets.DOCKER_REGISTRY }}/vimix-crm
+          tags: |
+            type=sha
+            latest
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile
           push: true
-          tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest,${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
-          build-args: |
-            JWT_SECRET=${{ env.JWT_SECRET }}
-            MONGODB_URI=${{ env.MONGODB_URI }}
-            REDIS_URL=${{ env.REDIS_URL }}
-            FRONTEND_PORT=9001
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
-      - name: Deploy to EC2 via SSM
+      - name: Send SSM command to pull and run container on EC2
         uses: aws-actions/aws-ssm-send-command@v1
         with:
-          instance-ids: ${{ env.EC2_INSTANCE_ID }}
-          document-name: AWS-RunShellScript
-          parameters: |
-            commands: |
-              set -e
-              echo "Pulling latest image..."
-              aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
-              docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
-
-              echo "Stopping existing container..."
-              docker stop vimix-crm || true
-              docker rm vimix-crm || true
-
-              echo "Starting new container..."
-              docker run -d \
-                --name vimix-crm \
-                --restart unless-stopped \
-                -p ${{ env.CONTAINER_PORT }}:${{ env.CONTAINER_PORT }} \
-                -e JWT_SECRET="${{ env.JWT_SECRET }}" \
-                -e MONGODB_URI="${{ env.MONGODB_URI }}" \
-                -e REDIS_URL="${{ env.REDIS_URL }}" \
-                -e FRONTEND_PORT=9001 \
-                -e PORT=${{ env.CONTAINER_PORT }} \
-                ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
-
-              echo "Cleaning up old images..."
-              docker image prune -f
-
-      - name: Wait for deployment to settle
-        run: sleep 15
-
-      - name: Health check
-        run: |
-          echo "Verifying deployment at ${{ env.PUBLIC_URL }}"
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 --max-time 30 ${{ env.PUBLIC_URL }}/health || echo "000")
-          echo "Health check HTTP status: $HTTP_STATUS"
-          if [ "$HTTP_STATUS" != "200" ]; then
-            echo "Health check failed with status $HTTP_STATUS"
-            exit 1
-          fi
-          echo "Deployment verified successfully!"
-
-      - name: Notify on failure
-        if: failure()
-        run: |
-          echo "Deployment workflow failed. Check the logs for details."
-          # Add Slack/webhook notification here if needed
+          instance-id: ${{ secrets.EC2_INSTANCE_ID }}
+          commands: |
+            docker pull ${{ secrets.DOCKER_REGISTRY }}/vimix-crm:latest
+            docker stop app || true
+            docker rm app || true
+            docker run -d --name app -p 80:80 ${{ secrets.DOCKER_REGISTRY }}/vimix-crm:latest
+          working-directory: /home/ubuntu
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
