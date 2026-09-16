@@ -2,50 +2,35 @@ name: Deploy to EC2
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
+      - name: Build Docker image
+        run: docker build -t vimix-app .
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Build Docker image
+          aws-region: us-east-1
+      - name: Save Docker image
+        run: docker save vimix-app | gzip > vimix-app.tar.gz
+      - name: Upload image to EC2
         run: |
-          docker build -t vimix-crm .
-
-      - name: Save Docker image as tar
+          scp -o StrictHostKeyChecking=no -i key.pem vimix-app.tar.gz ec2-user@${{ secrets.EC2_HOST }}:/home/ec2-user/
+      - name: Deploy on EC2
         run: |
-          docker save vimix-crm | gzip > vimix-crm.tar.gz
-
-      - name: Copy Docker image to EC2
-        run: |
-          scp -o StrictHostKeyChecking=no -i ${{ secrets.EC2_SSH_KEY }} vimix-crm.tar.gz ec2-user@${{ secrets.EC2_HOST }}:~/vimix-crm.tar.gz
-
-      - name: SSH and deploy container
-        run: |
-          ssh -o StrictHostKeyChecking=no -i ${{ secrets.EC2_SSH_KEY }} ec2-user@${{ secrets.EC2_HOST }} << 'EOF'
-            # Stop and remove existing container
-            docker stop app || true
-            docker rm app || true
-            # Load the new image
-            docker load < ~/vimix-crm.tar.gz
-            # Run the container
-            docker run -d --name app -p 80:80 vimix-crm
-            # Cleanup old images
-            docker image prune -f
+          ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@${{ secrets.EC2_HOST }} << 'EOF'
+            docker load < /home/ec2-user/vimix-app.tar.gz
+            docker stop vimix || true
+            docker rm vimix || true
+            docker run -d --name vimix -p 80:80 vimix-app
           EOF
