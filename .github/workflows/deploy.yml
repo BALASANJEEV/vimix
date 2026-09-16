@@ -1,34 +1,58 @@
-name: Deploy to EC2
+name: Build and Deploy
 on:
   push:
     branches: [ main ]
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
         with:
-          context: .
-          push: true
-          tags: ${{ secrets.DOCKER_USERNAME }}/vimix-app:latest
-      - name: Deploy to EC2
-        uses: appleboy/ssh-action@v1.2.1
+          mask-password: 'true'
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: vimix-crm
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Download task definition
+        run: |
+          aws ecs describe-task-definition --task-definition vimix-crm --query taskDefinition > task-definition.json
+
+      - name: Fill in new image ID in the Amazon ECS task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            docker pull ${{ secrets.DOCKER_USERNAME }}/vimix-app:latest
-            docker stop app || true
-            docker rm app || true
-            docker run -d --name app -p 80:80 ${{ secrets.DOCKER_USERNAME }}/vimix-app:latest
+          task-definition: task-definition.json
+          container-name: vimix-crm
+          image: ${{ steps.build-image.outputs.image }}
+
+      - name: Deploy Amazon ECS task definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: vimix-crm-service
+          cluster: vimix-crm-cluster
+          wait-for-service-stability: true
+
+      - name: Restart ECS service
+        run: |
+          aws ecs update-service --cluster vimix-crm-cluster --service vimix-crm-service --force-new-deployment
