@@ -8,7 +8,7 @@ RUN npm run build
 FROM node:20-alpine AS backend-builder
 WORKDIR /app/vimix-crm-backend
 COPY vimix-crm-backend/package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci
 
 FROM node:20-alpine
 RUN apk add --no-cache nginx wget && \
@@ -16,7 +16,7 @@ RUN apk add --no-cache nginx wget && \
 
 # Copy backend SOURCE first
 COPY vimix-crm-backend/ /usr/src/app
-# Then overlay production node_modules from the builder (so they are not clobbered)
+# Then overlay production node_modules from the builder
 COPY --from=backend-builder /app/vimix-crm-backend/node_modules /usr/src/app/node_modules
 # Frontend static build
 COPY --from=frontend-builder /app/vimix-crm-frontend/dist /var/www/html
