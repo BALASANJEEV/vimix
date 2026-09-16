@@ -1,58 +1,51 @@
-name: Build and Deploy
+name: Deploy to EC2
+
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-        with:
-          mask-password: 'true'
-
-      - name: Build, tag, and push image to Amazon ECR
-        id: build-image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: vimix-crm
-          IMAGE_TAG: ${{ github.sha }}
+      - name: Build Docker image
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          docker build -t vimix-crm .
 
-      - name: Download task definition
+      - name: Save Docker image as tar
         run: |
-          aws ecs describe-task-definition --task-definition vimix-crm --query taskDefinition > task-definition.json
+          docker save vimix-crm | gzip > vimix-crm.tar.gz
 
-      - name: Fill in new image ID in the Amazon ECS task definition
-        id: task-def
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
-        with:
-          task-definition: task-definition.json
-          container-name: vimix-crm
-          image: ${{ steps.build-image.outputs.image }}
-
-      - name: Deploy Amazon ECS task definition
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
-        with:
-          task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: vimix-crm-service
-          cluster: vimix-crm-cluster
-          wait-for-service-stability: true
-
-      - name: Restart ECS service
+      - name: Copy Docker image to EC2
         run: |
-          aws ecs update-service --cluster vimix-crm-cluster --service vimix-crm-service --force-new-deployment
+          scp -o StrictHostKeyChecking=no -i ${{ secrets.EC2_SSH_KEY }} vimix-crm.tar.gz ec2-user@${{ secrets.EC2_HOST }}:~/vimix-crm.tar.gz
+
+      - name: SSH and deploy container
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ${{ secrets.EC2_SSH_KEY }} ec2-user@${{ secrets.EC2_HOST }} << 'EOF'
+            # Stop and remove existing container
+            docker stop app || true
+            docker rm app || true
+            # Load the new image
+            docker load < ~/vimix-crm.tar.gz
+            # Run the container
+            docker run -d --name app -p 80:80 vimix-crm
+            # Cleanup old images
+            docker image prune -f
+          EOF
