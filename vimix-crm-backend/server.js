@@ -76,7 +76,7 @@ app.get('/health', (req, res) => {
       console.log(`Server running on port ${PORT} with MongoDB`);
     });
   } catch (err) {
-    console.error('Unable to start server:', err);
+    console.error('Unable to start server:', err.message);
     process.exit(1);
   }
 })();
