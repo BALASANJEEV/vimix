@@ -21,31 +21,34 @@ COPY --from=backend-builder /app/vimix-crm-backend/node_modules /usr/src/app/nod
 # Frontend static build
 COPY --from=frontend-builder /app/vimix-crm-frontend/dist /var/www/html
 
-RUN printf 'server {\n\
-    listen 80;\n\
-    server_name _;\n\
-    root /var/www/html;\n\
-    index index.html;\n\
-    client_max_body_size 20m;\n\
-    location /api/ {\n\
-        proxy_pass http://127.0.0.1:5000;\n\
-        proxy_http_version 1.1;\n\
-        proxy_set_header Host $host;\n\
-        proxy_set_header X-Real-IP $remote_addr;\n\
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n\
-        proxy_set_header X-Forwarded-Proto $scheme;\n\
-    }\n\
-    location /uploads/ {\n\
-        proxy_pass http://127.0.0.1:5000;\n\
-        proxy_set_header Host $host;\n\
-    }\n\
-    location /health {\n\
-        proxy_pass http://127.0.0.1:5000;\n\
-    }\n\
-    location / {\n\
-        try_files $uri $uri/ /index.html;\n\
-    }\n\
-}' > /etc/nginx/http.d/default.conf
+# Nginx configuration as a heredoc for readability
+RUN cat > /etc/nginx/http.d/default.conf <<'EOF'
+server {
+    listen 80;
+    server_name _;
+    root /var/www/html;
+    index index.html;
+    client_max_body_size 20m;
+    location /api/ {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location /uploads/ {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host $host;
+    }
+    location /health {
+        proxy_pass http://127.0.0.1:5000;
+    }
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+EOF
 
 WORKDIR /usr/src/app
 ENV NODE_ENV=production \
