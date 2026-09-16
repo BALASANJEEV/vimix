@@ -54,8 +54,16 @@ WORKDIR /usr/src/app
 ENV NODE_ENV=production \
     PORT=5000
 EXPOSE 80
+
+# Create uploads directory and set permissions
+RUN mkdir -p /usr/src/app/uploads && chmod 755 /usr/src/app/uploads
+
+# Copy startup script
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
+
+# Health check – wait for the Node.js server to be ready
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD wget -qO- http://127.0.0.1:5000/health || exit 1
 
-# Start script: run node in background with restart loop, nginx in foreground (PID 1)
-CMD ["sh", "-c", "mkdir -p /run/nginx /usr/src/app/uploads; (while true; do node server.js; sleep 2; done &) ; exec nginx -g 'daemon off;'"]
+CMD ["/start.sh"]
