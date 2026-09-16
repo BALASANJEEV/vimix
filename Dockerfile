@@ -9,19 +9,19 @@ FROM node:20-alpine AS backend-builder
 WORKDIR /app/vimix-crm-backend
 COPY vimix-crm-backend/package*.json ./
 RUN npm ci
+COPY vimix-crm-backend/ ./
 
 FROM node:20-alpine
 RUN apk add --no-cache nginx wget && \
     mkdir -p /run/nginx /etc/nginx/http.d /usr/src/app/uploads /var/www/html
 
-# Copy backend SOURCE first
-COPY vimix-crm-backend/ /usr/src/app
-# Then overlay production node_modules from the builder
-COPY --from=backend-builder /app/vimix-crm-backend/node_modules /usr/src/app/node_modules
+# Copy backend from builder (includes source + node_modules)
+COPY --from=backend-builder /app/vimix-crm-backend/ /usr/src/app
+
 # Frontend static build
 COPY --from=frontend-builder /app/vimix-crm-frontend/dist /var/www/html
 
-# Nginx configuration as a heredoc for readability
+# Nginx configuration
 RUN cat > /etc/nginx/http.d/default.conf <<'EOF'
 server {
     listen 80;
