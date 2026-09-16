@@ -58,12 +58,11 @@ EXPOSE 80
 # Create uploads directory and set permissions
 RUN mkdir -p /usr/src/app/uploads && chmod 755 /usr/src/app/uploads
 
-# Copy startup script
-COPY start.sh /start.sh
-RUN chmod +x /start.sh
+# Create startup script that runs nginx and the backend
+RUN echo '#!/bin/sh\n\n# Start nginx in the background\nnginx -g "daemon off;" &\n\n# Start the Node.js application\nexec node server.js' > /start.sh && chmod +x /start.sh
 
 # Health check – wait for the Node.js server to be ready
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
   CMD wget -qO- http://127.0.0.1:5000/health || exit 1
 
 CMD ["/start.sh"]
