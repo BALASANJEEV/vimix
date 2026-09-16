@@ -45,7 +45,7 @@ RUN printf 'server {\n\
     location / {\n\
         try_files $uri $uri/ /index.html;\n\
     }\n\
-}\n' > /etc/nginx/http.d/default.conf
+}' > /etc/nginx/http.d/default.conf
 
 WORKDIR /usr/src/app
 ENV NODE_ENV=production \
