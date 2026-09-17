@@ -46,21 +46,30 @@ jobs:
       - name: Deploy container on EC2 via SSM
         run: |
           IMAGE_URI="${ECR_REPOSITORY_URI}:${GITHUB_SHA}"
+          ECR_REGISTRY=$(echo "${ECR_REPOSITORY_URI}" | cut -d'/' -f1)
           echo "Deploying ${IMAGE_URI} to instance ${INSTANCE_ID}"
+
+          cat > /tmp/ssm-params.json << SSMPARAMS
+          {
+            "commands": [
+              "aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}",
+              "docker pull ${IMAGE_URI}",
+              "docker stop vimix 2>/dev/null || true",
+              "docker rm vimix 2>/dev/null || true",
+              "docker run -d --restart always -p 80:80 -p 5000:5000 --name vimix ${IMAGE_URI}"
+            ]
+          }
+          SSMPARAMS
+
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "${INSTANCE_ID}" \
             --region "${REGION}" \
             --document-name "AWS-RunShellScript" \
             --comment "Deploy Docker image" \
-            --parameters commands=[
-              \"docker pull ${IMAGE_URI}\",
-              \"docker stop vimix || true\",
-              \"docker rm vimix || true\",
-              \"docker run -d --name vimix -p ${CONTAINER_PORT}:${CONTAINER_PORT} ${IMAGE_URI}\"
-            ] \
+            --parameters file:///tmp/ssm-params.json \
             --query "Command.CommandId" \
             --output text)
-          
+
           echo "Waiting for SSM command ${COMMAND_ID} to complete..."
           aws ssm wait command-executed \
             --instance-id "${INSTANCE_ID}" \
