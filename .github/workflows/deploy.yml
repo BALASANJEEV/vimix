@@ -4,58 +4,43 @@ on:
   push:
     branches: [ main ]
 
-permissions:
-  contents: read
-  id-token: write
-
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: westus3
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          node-version: '22'
-          cache: 'npm'
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Install dependencies and build frontend
-        run: |
-          npm ci --prefix vimix-crm-frontend
-          npm run build --prefix vimix-crm-frontend
-
-      - name: Install backend dependencies
-        run: npm ci --prefix vimix-crm-backend
-
-      - name: Log in to Amazon ECR
+      - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
-        with:
-          mask-password: 'true'
 
-      - name: Build, tag, and push Docker image
+      - name: Build and push Docker image
         env:
-          ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
-          IMAGE_REPO_NAME: vimix-crm
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t $ECR_REGISTRY/$IMAGE_REPO_NAME:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/$IMAGE_REPO_NAME:$IMAGE_TAG
+          docker build -t $ECR_REGISTRY/vimix:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/vimix:$IMAGE_TAG
 
       - name: Deploy to Amazon ECS
-        uses: aws-actions/amazon-ecs-run-task@v1
+        uses: aws-actions/amazon-ecs-run-task@v1   # <-- version tag added
         with:
-          cluster: ${{ secrets.ECS_CLUSTER_NAME }}
-          task-definition: ${{ secrets.ECS_TASK_DEFINITION }}
-          launch-type: FARGATE
-          platform-version: LATEST
-          network-configuration: awsvpcConfiguration={subnets=${{ secrets.SUBNET_IDS }},securityGroups=${{ secrets.SECURITY_GROUP_IDS }},assignPublicIp=ENABLED}
-          overrides: >
-            {"containerOverrides":[{"name":"app","image":"${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/vimix-crm:${{ github.sha }}"}]}
+          task-definition: ecs-task-def.json
+          cluster: ${{ secrets.ECS_CLUSTER }}
+          service: ${{ secrets.ECS_SERVICE }}
           wait-for-service-stability: true
-
-      - name: Post‑deployment health check
-        run: |
-          # Simple curl check – adjust the URL to your service’s public endpoint
-          curl -f https://my‑service.example.com/health || exit 1
+          launch-type: FARGATE
+          network-configuration: awsvpcConfiguration={subnets=${{ secrets.SUBNET_IDS }},securityGroups=${{ secrets.SECURITY_GROUP_IDS }},assignPublicIp=ENABLED}
+          container-name: app
+          image: ${{ secrets.ECR_REGISTRY }}/vimix:${{ github.sha }}
