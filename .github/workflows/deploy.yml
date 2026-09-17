@@ -1,68 +1,61 @@
-name: Build and Deploy
+name: Deploy to Amazon ECS
 
 on:
   push:
-    branches: [main]
-  workflow_dispatch:
+    branches: [ main ]
 
-# Grant the workflow permission to request an OIDC token for role assumption
 permissions:
   contents: read
   id-token: write
 
 jobs:
   build-and-deploy:
-    runs-on: ubuntu-latest
-    environment: production
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Configure AWS credentials via OIDC role assumption
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ap-south-1
-          # Output the assumed credentials as environment variables for later steps
-          output-env-credentials: true
+          node-version: '22'
+          cache: 'npm'
 
-      # Log in to Amazon ECR
-      - name: Login to Amazon ECR
-        id: ecr_login
+      - name: Install dependencies and build frontend
         run: |
-          aws ecr get-login-password --region ${{ env.AWS_REGION }} |
-          docker login --username AWS --password-stdin ${{ env.ECR_REPO_URI }}
-        env:
-          AWS_REGION: ap-south-1
-          ECR_REPO_URI: 759204735992.dkr.ecr.ap-south-1.amazonaws.com/vimix
+          npm ci --prefix vimix-crm-frontend
+          npm run build --prefix vimix-crm-frontend
 
-      # Build the Docker image
-      - name: Build Docker image
-        run: |
-          docker build -t ${{ env.ECR_REPO_URI }}:latest .
-        env:
-          ECR_REPO_URI: 759204735992.dkr.ecr.ap-south-1.amazonaws.com/vimix
+      - name: Install backend dependencies
+        run: npm ci --prefix vimix-crm-backend
 
-      # Push the Docker image to ECR
-      - name: Push Docker image to ECR
-        run: |
-          docker push ${{ env.ECR_REPO_URI }}:latest
-        env:
-          ECR_REPO_URI: 759204735992.dkr.ecr.ap-south-1.amazonaws.com/vimix
-
-      # Deploy the image to the EC2 instance (example using SSM Run Command)
-      - name: Deploy to EC2 via SSM
-        uses: aws-actions/amazon-ecs-run-task@v1 # replace with your actual deployment method
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
         with:
-          cluster: your-ecs-cluster-name # if using ECS, otherwise replace with your own deployment step
-          task-definition: your-task-def
+          mask-password: 'true'
+
+      - name: Build, tag, and push Docker image
+        env:
+          ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+          IMAGE_REPO_NAME: vimix-crm
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$IMAGE_REPO_NAME:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$IMAGE_REPO_NAME:$IMAGE_TAG
+
+      - name: Deploy to Amazon ECS
+        uses: aws-actions/amazon-ecs-run-task@v1
+        with:
+          cluster: ${{ secrets.ECS_CLUSTER_NAME }}
+          task-definition: ${{ secrets.ECS_TASK_DEFINITION }}
           launch-type: FARGATE
-          network-configuration: awsvpcConfiguration={subnets=[subnet-xxxxxx],securityGroups=[sg-xxxxxx],assignPublicIp=ENABLED}
+          platform-version: LATEST
+          network-configuration: awsvpcConfiguration={subnets=${{ secrets.SUBNET_IDS }},securityGroups=${{ secrets.SECURITY_GROUP_IDS }},assignPublicIp=ENABLED}
+          overrides: >
+            {"containerOverrides":[{"name":"app","image":"${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/vimix-crm:${{ github.sha }}"}]}
           wait-for-service-stability: true
-        env:
-          AWS_REGION: ap-south-1
 
-      # Optional: Invalidate CloudFront cache or any post‑deployment cleanup
-      - name: Post‑deployment actions
-        run: echo "Deployment completed successfully."
+      - name: Post‑deployment health check
+        run: |
+          # Simple curl check – adjust the URL to your service’s public endpoint
+          curl -f https://my‑service.example.com/health || exit 1
