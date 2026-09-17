@@ -3,7 +3,7 @@ WORKDIR /app/frontend
 
 # Install frontend dependencies
 COPY vimix-crm-frontend/package*.json ./
-RUN npm ci
+RUN npm install --legacy-peer-deps
 
 # Copy source and build
 COPY vimix-crm-frontend/ .
@@ -15,7 +15,7 @@ WORKDIR /app/backend
 
 # Install backend dependencies (production only)
 COPY vimix-crm-backend/package*.json ./
-RUN npm ci --production
+RUN npm install --omit=dev --legacy-peer-deps
 
 # Copy backend source
 COPY vimix-crm-backend/ .
