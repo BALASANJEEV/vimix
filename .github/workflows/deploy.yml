@@ -1,65 +1,108 @@
-name: Deploy to EC2
+name: Production Deploy – EC2 Docker
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
+
+env:
+  REGION: ap-south-1
+  ECR_REPO_URI: 759204735992.dkr.ecr.ap-south-1.amazonaws.com/vimix
+  INSTANCE_ID: i-00587c18cd4c1fafd
+  PUBLIC_URL: http://16.4.4.34
+  SECRETS_MANAGER_ID: deptic/vimix/secrets
+  DETECTED_CONTAINER_PORT: 80
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        run: |
-          docker build -t vimix-app .
-
-      - name: Configure AWS credentials
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ env.REGION }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: github-actions-vimix-deploy
 
-      - name: Deploy to EC2 via SSM
+      - name: Retrieve runtime secrets from Secrets Manager
+        id: secrets
         run: |
-          # Save the image to a tar file
-          docker save vimix-app | gzip > /tmp/vimix-app.tar.gz
-          
-          # Upload to EC2
-          aws ssm send-command \
-            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
-            --document-name "AWS-RunShellScript" \
-            --parameters 'commands=["mkdir -p /opt/vimix", "cd /opt/vimix"]'
-          
-          # Copy the image tar to EC2
-          scp -o StrictHostKeyChecking=no -i /tmp/ssh_key /tmp/vimix-app.tar.gz ec2-user@${{ secrets.EC2_HOST }}:/opt/vimix/
-          
-          # Load and run the image on EC2
-          ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ec2-user@${{ secrets.EC2_HOST }} << 'EOF'
-            cd /opt/vimix
-            # Stop and remove old container if exists
-            docker stop vimix-app 2>/dev/null || true
-            docker rm vimix-app 2>/dev/null || true
-            # Load new image
-            gunzip -c vimix-app.tar.gz | docker load
-            # Run the container
-            docker run -d \
-              --name vimix-app \
-              --restart unless-stopped \
-              -p 80:80 \
+          aws secretsmanager get-secret-value \
+            --secret-id "${{ env.SECRETS_MANAGER_ID }}" \
+            --query SecretString \
+            --output text > secret.json
+          # Export each approved secret as an environment variable
+          for key in FRONTEND_PORT JWT_SECRET MONGODB_URI REDIS_URL; do
+            val=$(jq -r ".${key}" secret.json)
+            echo "${key}=${val}" >> $GITHUB_ENV
+          done
+          rm secret.json
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ env.ECR_REPO_URI }}:latest
+          cache-from: type=registry,ref=${{ env.ECR_REPO_URI }}:cache
+          cache-to: type=registry,ref=${{ env.ECR_REPO_URI }}:cache,mode=max
+
+      - name: Deploy image to EC2 via SSM
+        env:
+          IMAGE: ${{ env.ECR_REPO_URI }}:latest
+          INST_ID: ${{ env.INSTANCE_ID }}
+          FRONTEND_PORT: ${{ env.FRONTEND_PORT }}
+          JWT_SECRET: ${{ env.JWT_SECRET }}
+          MONGODB_URI: ${{ env.MONGODB_URI }}
+          REDIS_URL: ${{ env.REDIS_URL }}
+        run: |
+          COMMANDS=(
+            "docker pull $IMAGE"
+            "docker stop vimix || true"
+            "docker rm vimix || true"
+            "docker run -d --name vimix \
+              -p ${DETECTED_CONTAINER_PORT}:80 \
               -p 5000:5000 \
-              -e MONGO_URI=${{ secrets.MONGO_URI }} \
-              -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
-              -e NODE_ENV=production \
-              vimix-app
-          EOF
+              -e FRONTEND_PORT=${FRONTEND_PORT} \
+              -e JWT_SECRET=${JWT_SECRET} \
+              -e MONGODB_URI=${MONGODB_URI} \
+              -e REDIS_URL=${REDIS_URL} \
+              $IMAGE"
+          )
+          aws ssm send-command \
+            --instance-ids "$INST_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy Vimix CRM container" \
+            --parameters commands="${COMMANDS[*]}" \
+            --output json
 
-      - name: Cleanup
-        if: always()
+      - name: Wait for service to become healthy
         run: |
-          rm -f /tmp/vimix-app.tar.gz
-          rm -f /tmp/ssh_key
+          echo "Waiting up to 180 seconds for health endpoint..."
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ env.PUBLIC_URL }}/health" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Health check passed."
+              exit 0
+            fi
+            echo "Health check returned $STATUS – retrying in 5s..."
+            sleep 5
+          done
+          echo "Health check failed after multiple attempts."
+          exit 1
+
+    outputs:
+      public_ip: ${{ env.PUBLIC_URL }}
+      ecr_repo_url: ${{ env.ECR_REPO_URI }}
+      instance_id: ${{ env.INSTANCE_ID }}
