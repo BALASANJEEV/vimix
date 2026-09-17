@@ -1,67 +1,65 @@
-name: deploy
+name: Deploy to EC2
 
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
-    env:
-      EC2_HOST: ${{ secrets.EC2_HOST }}
-      EC2_USER: ${{ secrets.EC2_USER }}
-      SSH_KEY: ${{ secrets.SSH_KEY }}
-      DOCKER_IMAGE: vimix-app
-      CONTAINER_NAME: app
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "$SSH_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build Docker image
         run: |
-          docker build -t $DOCKER_IMAGE .
+          docker build -t vimix-app .
 
-      - name: Save Docker image to tarball
-        run: |
-          docker save $DOCKER_IMAGE | gzip > image.tar.gz
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
 
-      - name: Copy image to EC2
+      - name: Deploy to EC2 via SSM
         run: |
-          scp -i ~/.ssh/id_rsa image.tar.gz $EC2_USER@$EC2_HOST:/home/$EC2_USER/image.tar.gz
-
-      - name: Deploy on EC2
-        run: |
-          ssh -i ~/.ssh/id_rsa $EC2_USER@$EC2_HOST << 'EOF'
+          # Save the image to a tar file
+          docker save vimix-app | gzip > /tmp/vimix-app.tar.gz
+          
+          # Upload to EC2
+          aws ssm send-command \
+            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=["mkdir -p /opt/vimix", "cd /opt/vimix"]'
+          
+          # Copy the image tar to EC2
+          scp -o StrictHostKeyChecking=no -i /tmp/ssh_key /tmp/vimix-app.tar.gz ec2-user@${{ secrets.EC2_HOST }}:/opt/vimix/
+          
+          # Load and run the image on EC2
+          ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ec2-user@${{ secrets.EC2_HOST }} << 'EOF'
+            cd /opt/vimix
             # Stop and remove old container if exists
-            docker stop $CONTAINER_NAME 2>/dev/null || true
-            docker rm $CONTAINER_NAME 2>/dev/null || true
-
+            docker stop vimix-app 2>/dev/null || true
+            docker rm vimix-app 2>/dev/null || true
             # Load new image
-            docker load < /home/$EC2_USER/image.tar.gz
-
+            gunzip -c vimix-app.tar.gz | docker load
             # Run the container
             docker run -d \
-              --name $CONTAINER_NAME \
+              --name vimix-app \
+              --restart unless-stopped \
               -p 80:80 \
               -p 5000:5000 \
-              -e MONGO_URI='$MONGO_URI' \
-              -e JWT_SECRET='$JWT_SECRET' \
-              -e PORT=5000 \
-              $DOCKER_IMAGE
-
-            # Clean up tarball
-            rm /home/$EC2_USER/image.tar.gz
+              -e MONGO_URI=${{ secrets.MONGO_URI }} \
+              -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
+              -e NODE_ENV=production \
+              vimix-app
           EOF
-        env:
-          MONGO_URI: ${{ secrets.MONGO_URI }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          CONTAINER_NAME: app
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f /tmp/vimix-app.tar.gz
+          rm -f /tmp/ssh_key
