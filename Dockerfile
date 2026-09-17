@@ -58,9 +58,8 @@ EXPOSE 80
 # Create uploads directory and set permissions
 RUN mkdir -p /usr/src/app/uploads && chmod 755 /usr/src/app/uploads
 
-# Create startup script that runs nginx and waits for it before starting backend
-RUN echo '#!/bin/sh\n\n# Start nginx in the background\nnginx -g "daemon off;" &\nNGINX_PID=$!\n\n# Wait for nginx to be ready (max 10 seconds)\nfor i in $(seq 1 10); do\n    if wget -qO- http://127.0.0.1:80/health >/dev/null 2>&1; then\n        break\n    fi\n    sleep 1\ndone\n\n# Start the Node.js application with error handling
-exec node server.js \n# If node fails, ensure nginx is stopped to signal container failure\nRC=$?\nkill $NGINX_PID 2>/dev/null\nexit $RC' > /start.sh && chmod +x /start.sh
+# Create startup script
+RUN echo '#!/bin/sh\n\n# Start nginx in the background\nnginx -g "daemon off;" &\nNGINX_PID=$!\n\n# Wait for nginx to be ready (max 10 seconds)\nfor i in $(seq 1 10); do\n    if wget -qO- http://127.0.0.1:80/health >/dev/null 2>&1; then\n        break\n    fi\n    sleep 1\ndone\n\n# Start the Node.js application\nexec node server.js\nRC=$?\nkill $NGINX_PID 2>/dev/null\nexit $RC' > /start.sh && chmod +x /start.sh
 
 # Health check – wait for the Node.js server to be ready
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
