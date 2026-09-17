@@ -1,152 +1,71 @@
-name: Build & Deploy Vimix CRM
+name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main]
-  workflow_dispatch:
-
-env:
-  AWS_REGION: ap-south-1
-  ECR_REPOSITORY: vimix
-  ECR_REGISTRY: 759204735992.dkr.ecr.ap-south-1.amazonaws.com
-  INSTANCE_ID: i-0cd219f302c709ca2
-  CONTAINER_NAME: vimix-crm
-  CONTAINER_PORT: 5000
-  SSH_USER: ec2-user
-
-permissions:
-  contents: read
-  id-token: write
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::759204735992:role/GitHubActionsECR
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: GitHubActions
+    - name: Set up Node.js 22
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+    - name: Install dependencies
+      run: |
+        cd vimix-crm-backend && npm ci
+        cd ../vimix-crm-frontend && npm ci
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+    - name: Build frontend
+      run: |
+        cd vimix-crm-frontend && npm run build
 
-      - name: Build Docker image
-        id: build-image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile
-          push: true
-          tags: |
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            BUILDKIT_INLINE_CACHE=1
-          provenance: false
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
 
-      - name: Build diagnostics
-        run: |
-          echo "Image built and pushed: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
-          docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
-          docker image inspect ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }} --format='{{.Config.Cmd}} {{.Config.ExposedPorts}}'
-          echo "Diagnostics completed - image verified"
+    - name: Build and push Docker image
+      run: |
+        docker build -t vimix-crm-app .
+        docker tag vimix-crm-app:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/vimix-crm-app:latest
+        docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/vimix-crm-app:latest
 
-      - name: Fetch secrets from AWS Secrets Manager
-        id: secrets
-        uses: aws-actions/aws-secretsmanager-get-secrets@v2
-        with:
-          secret-ids: |
-            DEPLOY_SECRETS, deptic/vimix/secrets
-          parse-json: true
+    - name: Deploy to EC2 via SSM
+      uses: peterkimzz/aws-ssm-send-command@v1.0.0
+      with:
+        aws-region: us-east-1
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        instance-ids: ${{ secrets.EC2_INSTANCE_ID }}
+        command: |
+          # Authenticate to ECR
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
 
-      - name: Deploy to EC2 via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: 15.252.155.19
-          username: ${{ env.SSH_USER }}
-          key: ${{ steps.secrets.outputs.DEPLOY_SECRETS_SSH_PRIVATE_KEY }}
-          port: 22
-          script: |
-            set -e
-            echo "Starting deployment on instance ${{ env.INSTANCE_ID }}"
+          # Stop and remove existing container if it exists
+          docker stop vimix-crm-app || true
+          docker rm vimix-crm-app || true
 
-            # Login to ECR
-            aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
-              docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+          # Pull and run the new image
+          docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/vimix-crm-app:latest
+          docker run -d \
+            --name vimix-crm-app \
+            -p 80:80 \
+            -e NODE_ENV=production \
+            -e PORT=5000 \
+            -e DATABASE_URL=your_database_url \
+            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/vimix-crm-app:latest
 
-            # Pull the latest image
-            docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
-
-            # Stop and remove old container if running
-            docker stop ${{ env.CONTAINER_NAME }} 2>/dev/null || true
-            docker rm ${{ env.CONTAINER_NAME }} 2>/dev/null || true
-
-            # Run the new container
-            docker run -d \
-              --name ${{ env.CONTAINER_NAME }} \
-              --restart unless-stopped \
-              -p ${{ env.CONTAINER_PORT }}:${{ env.CONTAINER_PORT }} \
-              -e PORT=${{ env.CONTAINER_PORT }} \
-              -e BACKEND_PORT=${{ env.CONTAINER_PORT }} \
-              -e FRONTEND_PORT=80 \
-              -e JWT_SECRET="${{ steps.secrets.outputs.DEPLOY_SECRETS_JWT_SECRET }}" \
-              -e MONGODB_URI="${{ steps.secrets.outputs.DEPLOY_SECRETS_MONGODB_URI }}" \
-              -e REDIS_URL="${{ steps.secrets.outputs.DEPLOY_SECRETS_REDIS_URL }}" \
-              -v /home/ec2-user/uploads:/usr/src/app/uploads \
-              ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
-
-            # Clean up old images
-            docker image prune -f
-
-            echo "Container started successfully"
-
-      - name: Verify deployment - health check
-        run: |
-          echo "Waiting for container to be ready..."
-          sleep 15
-          MAX_RETRIES=12
-          RETRY_COUNT=0
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 http://15.252.155.19/health || echo "000")
-            if [ "$HTTP_CODE" = "200" ]; then
-              echo "Health check passed - HTTP 200"
-              curl -s http://15.252.155.19/health
-              echo ""
-              exit 0
-            fi
-            echo "Attempt $((RETRY_COUNT+1))/$MAX_RETRIES: HTTP $HTTP_CODE - retrying in 5s..."
-            RETRY_COUNT=$((RETRY_COUNT+1))
-            sleep 5
-          done
-          echo "Health check failed after $MAX_RETRIES attempts"
-          curl -v http://15.252.155.19/health || true
-          exit 1
-
-      - name: Verify public URL response
-        run: |
-          echo "Verifying public URL http://15.252.155.19"
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 http://15.252.155.19 || echo "000")
-          echo "Public URL HTTP status: $HTTP_CODE"
-          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "302" ]; then
-            echo "Warning: Public URL returned $HTTP_CODE, but frontend may still be operational"
-          fi
-
-      - name: Deployment summary
-        run: |
-          echo "=== Deployment Summary ==="
-          echo "ECR Image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
-          echo "Instance: ${{ env.INSTANCE_ID }}"
-          echo "Public URL: http://15.252.155.19"
-          echo "Health endpoint: http://15.252.155.19/health"
-          echo "Deployment completed successfully"
+          # Verify the container is running
+          sleep 10
+          docker ps | grep vimix-crm-app || echo 'Container failed to start'
