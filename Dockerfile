@@ -13,6 +13,9 @@ RUN npm run build
 FROM node:20-alpine AS backend-builder
 WORKDIR /app/backend
 
+# Install build tools required for native modules like sqlite3
+RUN apk add --no-cache python3 make g++ gcc libc-dev sqlite-dev
+
 # Install backend production dependencies only (no dev deps needed at runtime)
 COPY vimix-crm-backend/package*.json ./
 RUN npm install --omit=dev --legacy-peer-deps
@@ -27,8 +30,8 @@ WORKDIR /usr/src/app
 # Install nginx to serve the built frontend and proxy API requests
 RUN apk add --no-cache nginx && \
     mkdir -p /run/nginx && \
-    mkdir -p /etc/nginx/http.d && \
-    rm -f /etc/nginx/http.d/default.conf
+    mkdir -p /etc/nginx/conf.d && \
+    rm -f /etc/nginx/conf.d/default.conf
 
 # Copy backend runtime files
 COPY --from=backend-builder /app/backend /usr/src/app
@@ -51,7 +54,7 @@ RUN echo 'server {\
         proxy_set_header Host $host;\
         proxy_cache_bypass $http_upgrade;\
     }\
-}' > /etc/nginx/http.d/default.conf
+}' > /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 
