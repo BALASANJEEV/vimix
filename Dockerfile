@@ -27,8 +27,8 @@ FROM node:20-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /usr/src/app
 
-# Install nginx to serve the built frontend and proxy API requests
-RUN apk add --no-cache nginx && \
+# Install nginx and the SQLite runtime library (required by the pre‑compiled sqlite3 module)
+RUN apk add --no-cache nginx sqlite && \
     mkdir -p /run/nginx && \
     mkdir -p /etc/nginx/conf.d && \
     rm -f /etc/nginx/conf.d/default.conf
@@ -59,4 +59,4 @@ RUN echo 'server {\
 EXPOSE 80
 
 # Start the Express server in the background and keep Nginx in the foreground
-CMD ["sh", "-c", "node server.js & nginx -g 'daemon off;'"]
+CMD ["sh", "-c", "node server.js & nginx -g 'daemon off;'" ]
