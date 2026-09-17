@@ -1,71 +1,50 @@
-name: CI/CD Pipeline
+name: Build and Deploy
 
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-
+  build-and-deploy:
+    runs-on: ubuntu-24.04
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Node.js 22
-      uses: actions/setup-node@v4
-      with:
-        node-version: '22'
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: Install dependencies
-      run: |
-        cd vimix-crm-backend && npm ci
-        cd ../vimix-crm-frontend && npm ci
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-    - name: Build frontend
-      run: |
-        cd vimix-crm-frontend && npm run build
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/vimix-crm:latest
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: us-east-1
+      - name: Install AWS CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y awscli
 
-    - name: Build and push Docker image
-      run: |
-        docker build -t vimix-crm-app .
-        docker tag vimix-crm-app:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/vimix-crm-app:latest
-        docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/vimix-crm-app:latest
-
-    - name: Deploy to EC2 via SSM
-      uses: peterkimzz/aws-ssm-send-command@v1.0.0
-      with:
-        aws-region: us-east-1
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        instance-ids: ${{ secrets.EC2_INSTANCE_ID }}
-        command: |
-          # Authenticate to ECR
-          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
-
-          # Stop and remove existing container if it exists
-          docker stop vimix-crm-app || true
-          docker rm vimix-crm-app || true
-
-          # Pull and run the new image
-          docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/vimix-crm-app:latest
-          docker run -d \
-            --name vimix-crm-app \
-            -p 80:80 \
-            -e NODE_ENV=production \
-            -e PORT=5000 \
-            -e DATABASE_URL=your_database_url \
-            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/vimix-crm-app:latest
-
-          # Verify the container is running
-          sleep 10
-          docker ps | grep vimix-crm-app || echo 'Container failed to start'
+      - name: Run SSM command to deploy on EC2
+        uses: peterkimzz/aws-ssm-send-command@v1.0.1
+        id: ssm
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+          instance-ids: ${{ secrets.EC2_INSTANCE_ID }}
+          working-directory: /home/ubuntu
+          command: |
+            docker pull ${{ secrets.DOCKER_USERNAME }}/vimix-crm:latest
+            docker stop vimix-crm || true
+            docker rm vimix-crm || true
+            docker run -d --name vimix-crm -p 80:80 -p 5000:5000 --restart unless-stopped \
+              -e MONGO_URI=${{ secrets.MONGO_URI }} \
+              -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
+              ${{ secrets.DOCKER_USERNAME }}/vimix-crm:latest
