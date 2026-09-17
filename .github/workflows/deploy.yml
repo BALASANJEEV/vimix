@@ -1,48 +1,67 @@
-name: Build and Deploy
+name: deploy
 
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      packages: write
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      EC2_HOST: ${{ secrets.EC2_HOST }}
+      EC2_USER: ${{ secrets.EC2_USER }}
+      SSH_KEY: ${{ secrets.SSH_KEY }}
+      DOCKER_IMAGE: vimix-app
+      CONTAINER_NAME: app
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Log in to GitHub Container Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Build and push Docker image
+      - name: Install SSH key
         run: |
-          IMAGE_NAME=ghcr.io/${{ github.repository }}:latest
-          docker build -t $IMAGE_NAME .
-          docker push $IMAGE_NAME
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts
 
-  deploy:
-    runs-on: ubuntu-24.04
-    needs: build
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+      - name: Build Docker image
+        run: |
+          docker build -t $DOCKER_IMAGE .
 
-      - name: Send SSM command to pull and run container on EC2
-        uses: aws-actions/aws-ssm-send-command@v1
-        with:
-          instance-ids: ${{ vars.EC2_INSTANCE_ID }}
-          working-directory: /home/ubuntu
-          command: |
-            docker pull ghcr.io/${{ github.repository }}:latest
-            docker stop app || true
-            docker rm app || true
-            docker run -d --name app -p 80:80 -p 5000:5000 \
-              -e MONGO_URI=${{ secrets.MONGO_URI }} \
+      - name: Save Docker image to tarball
+        run: |
+          docker save $DOCKER_IMAGE | gzip > image.tar.gz
+
+      - name: Copy image to EC2
+        run: |
+          scp -i ~/.ssh/id_rsa image.tar.gz $EC2_USER@$EC2_HOST:/home/$EC2_USER/image.tar.gz
+
+      - name: Deploy on EC2
+        run: |
+          ssh -i ~/.ssh/id_rsa $EC2_USER@$EC2_HOST << 'EOF'
+            # Stop and remove old container if exists
+            docker stop $CONTAINER_NAME 2>/dev/null || true
+            docker rm $CONTAINER_NAME 2>/dev/null || true
+
+            # Load new image
+            docker load < /home/$EC2_USER/image.tar.gz
+
+            # Run the container
+            docker run -d \
+              --name $CONTAINER_NAME \
+              -p 80:80 \
+              -p 5000:5000 \
+              -e MONGO_URI='$MONGO_URI' \
+              -e JWT_SECRET='$JWT_SECRET' \
               -e PORT=5000 \
-              ghcr.io/${{ github.repository }}:latest
+              $DOCKER_IMAGE
+
+            # Clean up tarball
+            rm /home/$EC2_USER/image.tar.gz
+          EOF
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          CONTAINER_NAME: app
