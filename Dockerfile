@@ -42,7 +42,7 @@ COPY --from=backend-builder /app/backend /usr/src/app
 COPY --from=frontend-builder /app/frontend/dist /usr/share/nginx/html
 
 # Configure Nginx to serve the React app and proxy /api to Express
-RUN cat <<'EOF' > /etc/nginx/conf.d/default.conf
+RUN cat > /etc/nginx/conf.d/default.conf <<'EOF'
 server {
     listen 80;
     location / {
