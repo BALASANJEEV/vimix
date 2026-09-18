@@ -1,8 +1,7 @@
-# Use the official Node 24 Alpine image for both build and runtime stages
-#
-# ----------------------------------------
-# Stage 1 – Frontend build
-# ----------------------------------------
+# Dockerfile
+# -------------------------------------------------------------
+# 1️⃣  Frontend build stage
+# -------------------------------------------------------------
 FROM node:24-alpine AS frontend-builder
 WORKDIR /app/frontend
 
@@ -10,17 +9,17 @@ WORKDIR /app/frontend
 COPY vimix-crm-frontend/package*.json ./
 RUN npm ci --legacy-peer-deps
 
-# Copy source and build
+# Copy source code and build
 COPY vimix-crm-frontend/ .
 RUN npm run build
 
-# ----------------------------------------
-# Stage 2 – Backend build
-# ----------------------------------------
+# -------------------------------------------------------------
+# 2️⃣  Backend build stage
+# -------------------------------------------------------------
 FROM node:24-alpine AS backend-builder
 WORKDIR /app/backend
 
-# Install build tools for native modules
+# Install build utilities for native modules
 RUN apk add --no-cache python3 make g++ gcc libc-dev sqlite-dev libpq-dev
 
 # Install backend dependencies
@@ -30,31 +29,32 @@ RUN npm install --omit=dev --legacy-peer-deps
 # Copy backend source
 COPY vimix-crm-backend/ .
 
-# ----------------------------------------
-# Stage 3 – Runtime image (Fargate)
-# ----------------------------------------
+# -------------------------------------------------------------
+# 3️⃣  Runtime image (Fargate)
+# -------------------------------------------------------------
 FROM node:24-alpine AS runtime
 ENV NODE_ENV=production
 ENV MONGO_URI=mongodb://localhost:27017/vimix
 WORKDIR /usr/src/app
 
-# Install runtime deps (nginx, sqlite, Postgres client)
-RUN apk add --no-cache nginx sqlite libpq
-  && mkdir -p /run/nginx /etc/nginx/conf.d \
-  && rm -f /etc/nginx/conf.d/default.conf
+# Install runtime dependencies
+RUN apk add --no-cache nginx sqlite libpq \
+    && mkdir -p /run/nginx /etc/nginx/conf.d \
+    && rm -f /etc/nginx/conf.d/default.conf
 
 # Copy backend runtime files
 COPY --from=backend-builder /app/backend /usr/src/app
 
-# Copy frontend assets into Nginx document root
+# Copy built frontend assets to Nginx document root
 COPY --from=frontend-builder /app/frontend/dist /usr/share/nginx/html
 
-# Configure Nginx to serve React and proxy API calls
+# Configure Nginx to serve the React app and proxy API calls
 RUN cat > /etc/nginx/conf.d/default.conf <<'EOF'
 server {
     listen 80;
+    root /usr/share/nginx/html;
+    index index.html;
     location / {
-        root /usr/share/nginx/html;
         try_files $uri $uri/ /index.html;
     }
     location /api/ {
@@ -69,6 +69,5 @@ server {
 EOF
 
 EXPOSE 80 5000
-
-# Start Express (background) and Nginx (foreground)
+# Run Express in background and Nginx in foreground
 CMD ["sh", "-c", "node server.js & nginx -g 'daemon off;'" ]
