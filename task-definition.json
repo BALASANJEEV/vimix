@@ -9,7 +9,7 @@
   "containerDefinitions": [
     {
       "name": "app",
-      "image": "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/vimix:latest",
+      "image": "${IMAGE}",
       "essential": true,
       "portMappings": [
         { "containerPort": 80, "protocol": "tcp" },
