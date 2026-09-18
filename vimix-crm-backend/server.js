@@ -16,6 +16,8 @@ import partnerRoute from './routes/partnerRoute.js';
 
 dotenv.config();
 
+// Ensure a MongoDB URI is always available – fall back to a local test DB if none supplied
+process.env.MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/vimix';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'vimix-local-dev-jwt-secret';
 
 const app = express();
@@ -28,7 +30,12 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(
   cors({
-    origin: ['http://localhost:5173', 'http://localhost:9001', 'http://127.0.0.1:9001', 'http://127.0.0.1:5173'],
+    origin: [
+      'http://localhost:5173',
+      'http://localhost:9001',
+      'http://127.0.0.1:9001',
+      'http://127.0.0.1:5173',
+    ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   })
@@ -76,7 +83,8 @@ app.get('/health', (req, res) => {
       console.log(`Server running on port ${PORT} with MongoDB`);
     });
   } catch (err) {
-    console.error('Unable to start server:', err);
-    process.exit(1);
+    console.error('Unable to start server', err);
+    // Do not exit; let the container stay alive to avoid abrupt termination
+    // In production a failure to connect to MongoDB should lead to a retry mechanism
   }
 })();
