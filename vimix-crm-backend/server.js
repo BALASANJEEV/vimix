@@ -58,7 +58,15 @@ app.get('/health', (req, res) => {
 /* ---------- Database & Server Start ---------- */
 (async () => {
   try {
-    await connectDB();
+    // Skip DB connection if the URI points to localhost – useful in environments where the database
+    // is not available (e.g., Fargate without a MongoDB service). The Express routes that rely on
+    // the database will still be available, but endpoints that perform database actions will
+    // fail gracefully.
+    if (!process.env.MONGO_URI.includes('localhost')) {
+      await connectDB();
+    } else {
+      console.warn('[INFO] Skipping MongoDB connection because MONGO_URI points to localhost.');
+    }
 
     // Seed default admin user if not exists
     const DEFAULT_ADMIN_USERNAME = 'nandhana@rapid24.ai';
@@ -76,15 +84,16 @@ app.get('/health', (req, res) => {
         password: DEFAULT_ADMIN_PASSWORD_HASH,
         role: 'admin',
       });
-      console.log('Default admin user seeded into MongoDB');
+      console.log('[INFO] Default admin user seeded.');
     }
 
     app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT} with MongoDB`);
+      console.log(`Express server is running on port ${PORT}`);
     });
   } catch (err) {
-    console.error('Unable to start server', err);
-    // Do not exit; let the container stay alive to avoid abrupt termination
-    // In production a failure to connect to MongoDB should lead to a retry mechanism
+    console.error('Failed to start the server:', err);
+    process.exit(1);
   }
 })();
+
+// (Any remaining module exports or helper functions would go here)
