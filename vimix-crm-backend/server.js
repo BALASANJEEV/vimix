@@ -54,18 +54,23 @@ app.get('/health', (req, res) => {
       console.warn('[INFO] Skipping MongoDB connection because MONGO_URI points to localhost.');
     }
 
-    const DEFAULT_ADMIN_USERNAME = 'nandhana@rapid24.ai';
-    const existingAdmin = await Admin.findOne({ email: DEFAULT_ADMIN_USERNAME });
-    if (!existingAdmin) {
-      const hashed = await bcrypt.hash('password123', 10);
-      await Admin.create({
-        username: 'admin',
-        email: DEFAULT_ADMIN_USERNAME,
-        password: hashed,
-      });
-      console.log('[INFO] Default admin user created.');
-    } else {
-      console.log('[INFO] Default admin user already exists.');
+    // Attempt to create default admin but gracefully ignore DB errors
+    try {
+      const DEFAULT_ADMIN_USERNAME = 'nandhana@rapid24.ai';
+      const existingAdmin = await Admin.findOne({ email: DEFAULT_ADMIN_USERNAME });
+      if (!existingAdmin) {
+        const hashed = await bcrypt.hash('password123', 10);
+        await Admin.create({
+          username: 'admin',
+          email: DEFAULT_ADMIN_USERNAME,
+          password: hashed,
+        });
+        console.log('[INFO] Default admin user created.');
+      } else {
+        console.log('[INFO] Default admin user already exists.');
+      }
+    } catch (adminErr) {
+      console.warn('[WARN] Admin initialization failed (likely no DB):', adminErr.message);
     }
 
     app.listen(PORT, () => {
