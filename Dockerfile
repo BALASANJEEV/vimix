@@ -38,8 +38,9 @@ COPY --from=frontend-builder /app/vimix-crm-frontend/dist /usr/share/nginx/html
 RUN apk add --no-cache nginx && \
     mkdir -p /run/nginx
 
-# Write minimal nginx config
+# Write minimal nginx config (add required events block)
 RUN echo 'worker_processes 1;' > /etc/nginx/nginx.conf && \
+    echo 'events { }' >> /etc/nginx/nginx.conf && \
     cat <<EOF > /etc/nginx/http.d/default.conf
 server {
     listen 80;
@@ -69,4 +70,4 @@ EOF
 EXPOSE 80
 
 # Default command to start backend in background and nginx in foreground
-CMD ["sh", "-c", "mkdir -p /run/nginx && ( node /usr/src/backend/server.js & ) && nginx -g 'daemon off;'"]
+CMD ["sh", "-c", "mkdir -p /run/nginx && ( node /usr/src/backend/server.js & ) && nginx -g 'daemon off;'" ]
