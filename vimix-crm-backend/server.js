@@ -28,7 +28,12 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(
   cors({
-    origin: ['http://localhost:5173', 'http://localhost:9001', 'http://127.0.0.1:9001', 'http://127.0.0.1:5173'],
+    origin: [
+      'http://localhost:5173',
+      'http://localhost:9001',
+      'http://127.0.0.1:9001',
+      'http://127.0.0.1:5173',
+    ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   })
@@ -72,12 +77,12 @@ app.get('/health', (req, res) => {
     } catch (adminErr) {
       console.warn('[WARN] Admin initialization failed (likely no DB):', adminErr.message);
     }
-
-    app.listen(PORT, () => {
-      console.log(`[INFO] Server listening on port ${PORT}`);
-    });
   } catch (err) {
-    console.error('[ERROR] Server failed to start:', err);
+    console.error('Failed to initialize server:', err);
     process.exit(1);
   }
+
+  app.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+  });
 })();
