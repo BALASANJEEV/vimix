@@ -17,8 +17,8 @@ WORKDIR /app/backend
 # Install build tools for native modules
 RUN apk add --no-cache python3 make g++ gcc libc-dev sqlite-dev
 
-# Install backend deps
-COPY vimix-crm-backend/package*.json ./
+# Install backend dependencies
+COPY vimix-crm-backend/package*.json .
 RUN npm install --omit=dev --legacy-peer-deps
 
 # Copy backend source
@@ -31,10 +31,9 @@ ENV MONGO_URI=mongodb://localhost:27017/vimix
 WORKDIR /usr/src/app
 
 # Install runtime dependencies (Nginx & SQLite)
-RUN apk add --no-cache nginx sqlite && \
-    mkdir -p /run/nginx && \
-    mkdir -p /etc/nginx/conf.d && \
-    rm -f /etc/nginx/conf.d/default.conf
+RUN apk add --no-cache nginx sqlite \
+    && mkdir -p /run/nginx /etc/nginx/conf.d \
+    && rm -f /etc/nginx/conf.d/default.conf
 
 # Copy backend runtime files
 COPY --from=backend-builder /app/backend /usr/src/app
@@ -43,7 +42,23 @@ COPY --from=backend-builder /app/backend /usr/src/app
 COPY --from=frontend-builder /app/frontend/dist /usr/share/nginx/html
 
 # Configure Nginx to serve the React app and proxy /api to Express
-RUN echo 'server {\n    listen 80;\n    location / {\n        root /usr/share/nginx/html;\n        try_files $uri $uri/ /index.html;\n    }\n    location /api/ {\n        proxy_pass http://127.0.0.1:5000;\n        proxy_http_version 1.1;\n        proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection "upgrade";\n        proxy_set_header Host $host;\n        proxy_cache_bypass $http_upgrade;\n    }\n}' > /etc/nginx/conf.d/default.conf
+RUN cat <<'EOF' > /etc/nginx/conf.d/default.conf
+server {
+    listen 80;
+    location / {
+        root /usr/share/nginx/html;
+        try_files $uri $uri/ /index.html;
+    }
+    location /api/ {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+EOF
 
 EXPOSE 80
 
