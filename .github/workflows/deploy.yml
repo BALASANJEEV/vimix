@@ -1,104 +1,60 @@
-name: CI/CD - Build, Deploy, Verify
+name: Deploy to Amazon ECS
 
 on:
   push:
-    branches:
-      - main
-
-env:
-  ECR_REGISTRY: 759204735992.dkr.ecr.ap-south-1.amazonaws.com
-  REGION: ap-south-1
-  INSTANCE_ID: i-0d9bc861d7f1da138
-  PUBLIC_URL: http://3.111.163.127
+    branches: [ main ]
 
 jobs:
-  build_and_deploy:
+  deploy:
     runs-on: ubuntu-latest
+    environment: production
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      # Source code checkout
+      - uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      # Set up Node.js for the checkout/build phase
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Configure AWS Credentials
+      # Configure AWS credentials from the repository secrets
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
+      # Log in to Amazon ECR
       - name: Log in to Amazon ECR
+        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
-        with:
-          registry: ${{ env.ECR_REGISTRY }}
 
-      - name: Build and push backend image
+      # Build the Docker image and push it to the ECR registry
+      - name: Build, tag, and push image to ECR
+        id: build-image
         run: |
-          docker build -t vimix-backend:latest ./vimix-crm-backend
-          docker tag vimix-backend:latest ${{ env.ECR_REGISTRY }}/vimix-backend:${{ github.sha }}
-          docker push ${{ env.ECR_REGISTRY }}/vimix-backend:${{ github.sha }}
-
-      - name: Build and push frontend image
-        run: |
-          docker build -t vimix-frontend:latest ./vimix-crm-frontend
-          docker tag vimix-frontend:latest ${{ env.ECR_REGISTRY }}/vimix-frontend:${{ github.sha }}
-          docker push ${{ env.ECR_REGISTRY }}/vimix-frontend:${{ github.sha }}
-
-      - name: Deploy to EC2 via SSM
+          IMAGE_TAG=${GITHUB_SHA::7}
+          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${IMAGE_TAG}
+          echo "Building Docker image ${IMAGE_URI}"
+          docker build -t ${IMAGE_URI} .
+          echo "Pushing image ${IMAGE_URI}"
+          docker push ${IMAGE_URI}
+          echo "IMAGE_URI=${IMAGE_URI}" >> $GITHUB_OUTPUT
         env:
-          BACKEND_IMAGE_URI: ${{ env.ECR_REGISTRY }}/vimix-backend:${{ github.sha }}
-          FRONTEND_IMAGE_URI: ${{ env.ECR_REGISTRY }}/vimix-frontend:${{ github.sha }}
-        run: |
-          cat > /tmp/ssm-params.json <<EOF
-          {
-            "commands": [
-              "aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REGISTRY",
-              "docker pull $BACKEND_IMAGE_URI",
-              "docker stop vimix-backend || true",
-              "docker rm vimix-backend || true",
-              "docker run -d --restart always -p 5000:5000 --name vimix-backend $BACKEND_IMAGE_URI",
-              "docker pull $FRONTEND_IMAGE_URI",
-              "docker stop vimix-frontend || true",
-              "docker rm vimix-frontend || true",
-              "docker run -d --restart always -p 80:80 --name vimix-frontend $FRONTEND_IMAGE_URI"
-            ]
-          }
-          EOF
+          ECR_REPOSITORY: my-ecs-repo  # <-- replace with your ECR repo name
 
-          COMMAND_ID=$(aws ssm send-command \
-            --instance-ids "$INSTANCE_ID" \
-            --region "$REGION" \
-            --document-name "AWS-RunShellScript" \
-            --parameters file:///tmp/ssm-params.json \
-            --query "Command.CommandId" --output text)
-          echo "SSM command ID: $COMMAND_ID"
-
-          echo "Waiting for SSM command to complete..."
-          while true; do
-            STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --region "$REGION" --query "Status" --output text)
-            echo "Status: $STATUS"
-            if [[ "$STATUS" == "Success" ]]; then
-              break
-            elif [[ "$STATUS" == "Failed" || "$STATUS" == "TimedOut" || "$STATUS" == "Cancelled" ]]; then
-              echo "SSM command failed with status $STATUS"
-              exit 1
-            fi
-            sleep 5
-          done
-          echo "SSM command completed successfully"
-
-          echo "Performing health check on backend"
-          if ! curl -f "$PUBLIC_URL:5000/health"; then
-            echo "Health check failed"
-            exit 1
-          else
-            echo "Health check succeeded"
-          fi
-
-# End of workflow #
+      # Deploy the updated task definition to the desired ECS service
+      - name: Deploy to Amazon ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ecs-task-def.json
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          image: ${{ steps.build-image.outputs.IMAGE_URI }}
+          desired-count: 1
+        env:
+          ECS_CLUSTER: my-ecs-cluster          # <-- replace with your ECS cluster name
+          ECS_SERVICE: my-ecs-service          # <-- replace with your ECS service name
+}
