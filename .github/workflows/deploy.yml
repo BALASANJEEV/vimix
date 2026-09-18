@@ -2,44 +2,53 @@ name: Deploy to ECS
 
 on:
   push:
-    branches: [main]
-
-env:
-  AWS_REGION: us-east-1
-  ECR_REPOSITORY: vimix
-  ECS_CLUSTER: vimix-cluster
-  ECS_SERVICE: vimix-service
-  IMAGE_TAG: latest
-  TASK_DEFINITION_FILE: task-definition.json
+    branches:
+      - main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      REPO_URI: "$${{ secrets.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}"
+      IMAGE_TAG: "$${{ github.sha }}"
+      CLUSTER: "${{ vars.ECS_CLUSTER }}"
+      SERVICE: "${{ vars.ECS_SERVICE }}"
+      TASK_DEFINITION: "task-definition.json"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: $${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: $${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: $${{ vars.AWS_REGION }}
 
-      - name: Log in to Amazon ECR
+      - name: Log in to ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag and push Docker image
+      - name: Build and push Docker image
         run: |
-          IMAGE_URI="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
-          docker build -t $IMAGE_URI .
-          docker push $IMAGE_URI
+          docker build -t $REPO_URI:$IMAGE_TAG .
+          docker push $REPO_URI:$IMAGE_TAG
 
-      - name: Deploy to ECS
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
-        with:
-          task-definition: ${{ env.TASK_DEFINITION_FILE }}
-          service: ${{ env.ECS_SERVICE }}
-          cluster: ${{ env.ECS_CLUSTER }}
-          image: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
-          wait-for-service-stable: true
+      - name: Register new task definition
+        id: register_task
+        run: |
+          UPDATED_TASK=$(cat $TASK_DEFINITION | jq --arg image "$REPO_URI:$IMAGE_TAG" '.containerDefinitions[0].image=$image')
+          echo "$UPDATED_TASK" > /tmp/updated-task.json
+          aws ecs register-task-definition \
+            --cli-input-json file:///tmp/updated-task.json
+
+      - name: Update ECS service
+        run: |
+          aws ecs update-service \
+            --cluster $CLUSTER \
+            --service $SERVICE \
+            --force-new-deployment
