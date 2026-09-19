@@ -1,0 +1,88 @@
+name: Build and Deploy to EC2 Docker
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: vimix
+  INSTANCE_ID: i-0b95f619434abdcd6
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build image
+        run: |
+          set -x
+          docker build -t vimix:ci -f Dockerfile .
+
+      - name: Push image
+        run: |
+          set -x
+          ECR_REGISTRY="759204735992.dkr.ecr.ap-south-1.amazonaws.com"
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+          IMAGE_SHA="$ECR_REGISTRY/$ECR_REPOSITORY:${GITHUB_SHA::12}"
+          docker tag vimix:ci "$IMAGE_URI"
+          docker tag vimix:ci "$IMAGE_SHA"
+          docker push "$IMAGE_URI"
+          docker push "$IMAGE_SHA"
+          echo "IMAGE_URI=$IMAGE_SHA" >> "$GITHUB_ENV"
+
+      - name: Deploy via SSM
+        run: |
+          set -x
+          REGION="${{ env.AWS_REGION }}"
+          INSTANCE_ID="${{ env.INSTANCE_ID }}"
+          ECR_REGISTRY="759204735992.dkr.ecr.ap-south-1.amazonaws.com"
+          ECR_REPOSITORY="${{ env.ECR_REPOSITORY }}"
+          IMAGE_URI="${{ env.IMAGE_URI }}"
+          cat > /tmp/ssm-params.json << 'SSMPARAMS'
+          {
+            "commands": [
+              "aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REGISTRY",
+              "docker pull $IMAGE_URI",
+              "docker stop app || true",
+              "docker rm app || true",
+              "docker run -d --restart always -p 80:80 --name app -e PORT=5000 -e NODE_ENV=production -e JWT_SECRET=$JWT_SECRET -e MONGODB_URI=$MONGODB_URI -e REDIS_URL=$REDIS_URL $IMAGE_URI"
+            ]
+          }
+          SSMPARAMS
+          COMMAND_ID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" --region "$REGION" --document-name "AWS-RunShellScript" --parameters file:///tmp/ssm-params.json --query "Command.CommandId" --output text)
+          echo "SSM command: $COMMAND_ID"
+          for i in $(seq 1 30); do
+            STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --region "$REGION" --query "Status" --output text)
+            echo "Status: $STATUS"
+            [ "$STATUS" = "Success" ] && exit 0
+            [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ] && exit 1
+            sleep 10
+          done
+          exit 1
+
+      - name: Verify health
+        run: |
+          set -x
+          for i in $(seq 1 30); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://15.207.145.62/health || true)
+            echo "HTTP $CODE"
+            [ "$CODE" = "200" ] && echo "Deployment healthy" && exit 0
+            sleep 10
+          done
+          echo "Health check failed"
+          exit 1
