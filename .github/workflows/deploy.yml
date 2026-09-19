@@ -1,0 +1,110 @@
+name: Deploy Vimix CRM to EC2 Docker
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: vimix
+  INSTANCE_ID: i-094f634caa11c9759
+  PUBLIC_URL: http://13.234.210.33
+  SECRETS_ID: deptic/vimix/secrets
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::759204735992:role/vimix-github-actions-role
+          aws-region: ap-south-1
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute image URI
+        run: |
+          echo "IMAGE_URI=759204735992.dkr.ecr.ap-south-1.amazonaws.com/vimix:${{ github.sha }}" >> "$GITHUB_ENV"
+          echo "IMAGE_LATEST=759204735992.dkr.ecr.ap-south-1.amazonaws.com/vimix:latest" >> "$GITHUB_ENV"
+
+      - name: Build image (with diagnostics)
+        run: |
+          docker build -t "$IMAGE_URI" -t "$IMAGE_LATEST" -f Dockerfile . 2>&1 | tee /tmp/build.log
+          echo "----- Build log tail -----"
+          tail -n 40 /tmp/build.log
+          docker images | head -n 5
+
+      - name: Push image to ECR
+        run: |
+          docker push "$IMAGE_URI"
+          docker push "$IMAGE_LATEST"
+
+      - name: Deploy to EC2 via SSM
+        run: |
+          REGION="$AWS_REGION"
+          ECR_REGISTRY="759204735992.dkr.ecr.ap-south-1.amazonaws.com"
+          IMAGE_URI="$IMAGE_LATEST"
+          INSTANCE_ID="$INSTANCE_ID"
+          SECRETS_ID="$SECRETS_ID"
+
+          cat > /tmp/ssm-params.json << 'SSMPARAMS'
+          {
+            "commands": [
+              "set -e",
+              "aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}",
+              "docker pull ${IMAGE_URI}",
+              "docker stop app || true",
+              "docker rm app || true",
+              "aws secretsmanager get-secret-value --secret-id ${SECRETS_ID} --region ${REGION} --query SecretString --output text > /tmp/vimix-env.json",
+              "python3 -c \"import json; d=json.load(open('/tmp/vimix-env.json')); [print(f'{k}={v}') for k,v in d.items() if k in ('BACKEND_PORT','FRONTEND_PORT','JWT_SECRET','MONGODB_URI','MONGO_URI','PORT','REDIS_URL','VITE_API_URL')]\" > /tmp/vimix.env",
+              "chmod 600 /tmp/vimix.env",
+              "docker run -d --restart always -p 80:80 --name app --env-file /tmp/vimix.env -e PORT=5000 -e NODE_ENV=production -v /app/uploads:/app/uploads ${IMAGE_URI}",
+              "rm -f /tmp/vimix-env.json",
+              "sleep 15",
+              "docker ps --filter name=app"
+            ]
+          }
+          SSMPARAMS
+
+          sed -i "s|\${REGION}|$REGION|g; s|\${ECR_REGISTRY}|$ECR_REGISTRY|g; s|\${IMAGE_URI}|$IMAGE_URI|g; s|\${INSTANCE_ID}|$INSTANCE_ID|g; s|\${SECRETS_ID}|$SECRETS_ID|g" /tmp/ssm-params.json
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --region "$REGION" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy vimix ${{ github.sha }}" \
+            --parameters file:///tmp/ssm-params.json \
+            --query "Command.CommandId" --output text)
+          echo "SSM CommandId: $COMMAND_ID"
+          aws ssm wait command-executed --instance-id "$INSTANCE_ID" --command-id "$COMMAND_ID" --region "$REGION"
+          aws ssm get-command-invocation --instance-id "$INSTANCE_ID" --command-id "$COMMAND_ID" --region "$REGION" \
+            --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}' --output text
+
+      - name: Verify deployment health
+        run: |
+          for i in $(seq 1 20); do
+            echo "Health check attempt $i ..."
+            CODE=$(curl -s -o /tmp/health.out -w "%{http_code}" "$PUBLIC_URL/health" || true)
+            echo "HTTP status: $CODE; body:"; cat /tmp/health.out || true
+            if [ "$CODE" = "200" ]; then
+              echo "Deployment healthy."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Health check failed after retries."
+          exit 1
