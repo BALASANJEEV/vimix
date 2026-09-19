@@ -2,7 +2,7 @@ name: Build & Deploy to EC2 Docker
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -32,37 +32,52 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push Docker image
-        id: build-push
+      - name: Build Docker image
+        id: build-image
         env:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           set -e
           IMAGE_URI="${ECR_REPOSITORY_URI}"
-          echo "Building Docker image ${IMAGE_URI}:${IMAGE_TAG} and ${IMAGE_URI}:latest"
+          echo "Building Docker image ${IMAGE_URI}:${IMAGE_TAG}"
           docker build \
             --progress=plain \
             --file Dockerfile \
             --tag "${IMAGE_URI}:${IMAGE_TAG}" \
             --tag "${IMAGE_URI}:latest" \
             .
-          echo "Pushing Docker images"
-          docker push "${IMAGE_URI}:${IMAGE_TAG}"
-          docker push "${IMAGE_URI}:latest"
           echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+
+      - name: Build diagnostics
+        run: |
+          set -e
+          echo "Docker images:"
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"
+          echo "Docker build history for latest image:"
+          docker history "${ECR_REPOSITORY_URI}:latest" | head -n 20
+
+      - name: Push Docker images
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -e
+          IMAGE_URI="${ECR_REPOSITORY_URI}"
+          echo "Pushing Docker image ${IMAGE_URI}:${IMAGE_TAG}"
+          docker push "${IMAGE_URI}:${IMAGE_TAG}"
+          echo "Pushing Docker image ${IMAGE_URI}:latest"
+          docker push "${IMAGE_URI}:latest"
 
       - name: Deploy image to EC2 via SSM
         run: |
           set -e
-          IMAGE_URI="${ECR_REPOSITORY_URI}:latest"
           cat > /tmp/ssm-params.json << 'SSMPARAMS'
           {
             "commands": [
-              "aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REPOSITORY_URI",
-              "docker pull $IMAGE_URI",
+              "aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 759204735992.dkr.ecr.ap-south-1.amazonaws.com",
+              "docker pull 759204735992.dkr.ecr.ap-south-1.amazonaws.com/vimix:latest",
               "docker stop app || true",
               "docker rm app || true",
-              "docker run -d --restart always -p ${CONTAINER_PORT}:${CONTAINER_PORT} --name app $IMAGE_URI"
+              "docker run -d --restart always -p 80:80 --name app 759204735992.dkr.ecr.ap-south-1.amazonaws.com/vimix:latest"
             ]
           }
           SSMPARAMS
@@ -76,7 +91,6 @@ jobs:
             --output text)
 
           echo "SSM command sent (ID: $COMMAND_ID). Waiting for completion..."
-
           while true; do
             STATUS=$(aws ssm list-command-invocations \
               --command-id "$COMMAND_ID" \
@@ -99,18 +113,18 @@ jobs:
 
       - name: Verify service health
         env:
-          HEALTH_URL: "${PUBLIC_URL}/health"
+          HEALTH_URL: "${{ env.PUBLIC_URL }}/health"
         run: |
           set -e
-          echo "Waiting for health endpoint ${HEALTH_URL}..."
-          for i in {1..30}; do
+          echo "Waiting for health endpoint $HEALTH_URL..."
+          for i in $(seq 1 30); do
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "000")
-            if [ "$HTTP_CODE" -eq 200 ]; then
+            if [ "$HTTP_CODE" = "200" ]; then
               echo "Health check passed."
               exit 0
             fi
-            echo "Attempt $i: received HTTP $HTTP_CODE, retrying in 10s..."
-            sleep 10
+            echo "Attempt $i: received HTTP $HTTP_CODE, retrying in 5s..."
+            sleep 5
           done
           echo "Health check failed after multiple attempts."
           exit 1
