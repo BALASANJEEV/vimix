@@ -15,7 +15,7 @@ import {
   Trash2,
   Plus,
 } from "lucide-react";
-import { getClientDetails } from "../services/apiClient"; // <- your API util
+import { getAssetUrl, getClientDetails } from "../services/apiClient";
 import type {
   Client,
   Project,
@@ -250,10 +250,10 @@ const ClientDetail: React.FC = () => {
                       </p>
                     </div>
                     <div className="flex space-x-2">
-                      <button onClick={() => window.open(doc.url, "_blank")}>
+                      <button onClick={() => window.open(getAssetUrl(doc.url), "_blank")}>
                         <Eye size={16} />
                       </button>
-                      <button onClick={() => window.open(doc.url, "_blank")}>
+                      <button onClick={() => window.open(getAssetUrl(doc.url), "_blank")}>
                         <Download size={16} />
                       </button>
                     </div>

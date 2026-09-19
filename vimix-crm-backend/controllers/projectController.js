@@ -63,7 +63,7 @@ export const createProject = async (req, res) => {
     });
 
     // Invalidate cached project list
-    await redis.del('projects:all');
+    await redis.delByPrefix('projects:');
 
     res.status(201).json(project);
   } catch (err) {
@@ -75,13 +75,13 @@ export const createProject = async (req, res) => {
 /** Get all projects */
 export const getAllProjects = async (req, res) => {
   try {
+    const { id: userId, role } = req.user;
+    const cacheKey = `projects:${role}:${userId}`;
     // Try cache first
-    const cached = await redis.get('projects:all');
+    const cached = await redis.get(cacheKey);
     if (cached) {
       return res.json(JSON.parse(cached));
     }
-
-    const { id: userId, role } = req.user;
 
     let filter = {};
     if (role === 'partner') {
@@ -115,7 +115,7 @@ export const getAllProjects = async (req, res) => {
     });
 
     // Cache result for 60 seconds
-    await redis.set('projects:all', JSON.stringify(result), 60);
+    await redis.set(cacheKey, JSON.stringify(result), 60);
 
     res.json(result);
   } catch (err) {
@@ -139,6 +139,7 @@ export const getProjectById = async (req, res) => {
       client &&
       client.createdById !== userId
     ) {
+      if (file?.path) fs.unlink(file.path, () => {});
       return res.status(403).json({ message: 'Access denied' });
     }
 
@@ -241,7 +242,7 @@ export const updateProject = async (req, res) => {
     await project.save();
 
     // Invalidate cached project list
-    await redis.del('projects:all');
+    await redis.delByPrefix('projects:');
 
     res.json(project);
   } catch (err) {
@@ -284,7 +285,7 @@ export const deleteProject = async (req, res) => {
     await Payment.deleteMany({ projectId: req.params.id });
 
     // Invalidate cached project list
-    await redis.del('projects:all');
+    await redis.delByPrefix('projects:');
 
     res.json({ message: 'Project deleted' });
   } catch (err) {
@@ -337,7 +338,7 @@ export const updateProjectStage = async (req, res) => {
 
     await project.save();
     // Invalidate cached project list
-    await redis.del('projects:all');
+    await redis.delByPrefix('projects:');
     res.json(project);
   } catch (err) {
     console.error('Update stage error:', err);

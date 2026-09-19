@@ -26,7 +26,7 @@ const __dirname = path.dirname(__filename);
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     const { id } = req.params;
-    const dest = path.join(__dirname, '..', 'uploads', 'projects', id);
+    const dest = path.join(process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads'), 'projects', id);
     fs.mkdirSync(dest, { recursive: true });
     cb(null, dest);
   },
@@ -36,7 +36,10 @@ const storage = multer.diskStorage({
     cb(null, `${timestamp}_${safeName}`);
   }
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 // Apply middleware per route: only admins & partners can access
 router.post('/', requireRole('admin', 'partner'), createProject);

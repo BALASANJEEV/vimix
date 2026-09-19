@@ -1,8 +1,15 @@
 import axios, { AxiosError, AxiosResponse } from 'axios';
 
 // ✅ Create Axios instance with credentials enabled
+export const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+
+export const getAssetUrl = (url: string) => {
+  if (/^https?:\/\//i.test(url)) return url;
+  return `${API_BASE_URL}${url}`;
+};
+
 const API = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '',
+  baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },

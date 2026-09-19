@@ -8,11 +8,9 @@ import {
   IndianRupee
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getProjectDetails, uploadProjectDocument, deleteProjectDocument, addProjectMeeting } from '../services/apiClient';
+import { getAssetUrl, getProjectDetails, uploadProjectDocument, deleteProjectDocument, addProjectMeeting } from '../services/apiClient';
 
 const ProjectDetail: React.FC = () => {
-
-  const baseUrl = import.meta.env.VITE_API_URL;
 
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -420,7 +418,7 @@ const ProjectDetail: React.FC = () => {
   <div className="flex items-center space-x-2">
     {/* 👁 View Document */}
     <a
-      href={`${baseUrl}${document.url}`}
+      href={getAssetUrl(document.url)}
       target="_blank"
       rel="noopener noreferrer"
       className="p-2 text-gray-600 hover:text-black hover:bg-gray-100 rounded-md transition-colors"
@@ -431,7 +429,7 @@ const ProjectDetail: React.FC = () => {
 
     {/* ⬇️ Download Document */}
     <a
-      href={`${baseUrl}${document.url}`}
+      href={getAssetUrl(document.url)}
       target="_blank"
       download
       className="p-2 text-gray-600 hover:text-black hover:bg-gray-100 rounded-md transition-colors"

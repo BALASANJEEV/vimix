@@ -8,13 +8,15 @@ import { uploadProjectDocument } from '../controllers/projectController.js';
 import { requireRole } from '../middleware/verifyPartner.js';
 
 const router = express.Router();
+const rejectPublicSignup = (req, res) => res.status(403).json({ message: 'Public signup is disabled' });
+const publicSignup = process.env.NODE_ENV !== 'production' || process.env.ALLOW_PUBLIC_SIGNUP === 'true';
 
 // auth
-router.post('/register', registerPartner); // optional; could be admin-only in real app
+router.post('/register', publicSignup ? registerPartner : rejectPublicSignup);
 router.post('/login', loginPartner);
 
 // secure routes
-router.post('/projects', requireRole, createPartnerProject);
+router.post('/projects', requireRole('partner'), createPartnerProject);
 
 // restrict uploads to only SRS for partners
 const __filename = fileURLToPath(import.meta.url);
@@ -22,7 +24,7 @@ const __dirname = path.dirname(__filename);
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     const { id } = req.params;
-    const dest = path.join(__dirname, '..', 'uploads', 'projects', id);
+    const dest = path.join(process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads'), 'projects', id);
     fs.mkdirSync(dest, { recursive: true });
     cb(null, dest);
   },
@@ -32,17 +34,21 @@ const storage = multer.diskStorage({
     cb(null, `${timestamp}_${safeName}`);
   }
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 // wrapper to force docType='srs' and check ownership
-router.post('/projects/:id/srs', requireRole, upload.single('file'), async (req, res, next) => {
+router.post('/projects/:id/srs', requireRole('partner'), upload.single('file'), async (req, res) => {
   try {
     req.body.docType = 'srs';
     // ensure project belongs to this partner
     // Minimal inline check to avoid circular import
     const { default: Project } = await import('../models/Project.js');
-    const project = await Project.findByPk(req.params.id);
+    const project = await Project.findById(req.params.id);
     if (!project || project.partnerId !== req.user.id) {
+      if (req.file?.path) fs.unlink(req.file.path, () => {});
       return res.status(404).json({ message: 'Project not found' });
     }
     return uploadProjectDocument(req, res);

@@ -16,7 +16,7 @@ export const createClient = async (req, res) => {
     });
 
     // Invalidate cached client list
-    await redis.del('clients:all');
+    await redis.delByPrefix('clients:');
 
     res.status(201).json({
       message: 'Client created successfully',
@@ -31,18 +31,19 @@ export const createClient = async (req, res) => {
 /** Get all clients */
 export const getClients = async (req, res) => {
   try {
+    const { id: userId, role } = req.user;
+    const cacheKey = `clients:${role}:${userId}`;
     // Try cache first
-    const cached = await redis.get('clients:all');
+    const cached = await redis.get(cacheKey);
     if (cached) {
       return res.json(JSON.parse(cached));
     }
 
-    const { id: userId, role } = req.user;
     const filter = role === 'partner' ? { createdById: userId } : {};
 
     const clients = await Client.find(filter).sort({ createdAt: -1 });
     // Store in cache for 60 seconds
-    await redis.set('clients:all', JSON.stringify(clients), 60);
+    await redis.set(cacheKey, JSON.stringify(clients), 60);
     res.json(clients);
   } catch (err) {
     console.error(err);
@@ -84,7 +85,7 @@ export const updateClient = async (req, res) => {
     await client.save();
 
     // Invalidate cached client list
-    await redis.del('clients:all');
+    await redis.delByPrefix('clients:');
 
     res.json(client);
   } catch (err) {
@@ -110,7 +111,7 @@ export const deleteClient = async (req, res) => {
     await Payment.deleteMany({ clientId: req.params.id });
 
     // Invalidate cached client list
-    await redis.del('clients:all');
+    await redis.delByPrefix('clients:');
 
     res.json({ message: 'Client removed' });
   } catch (err) {

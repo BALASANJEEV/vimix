@@ -1,4 +1,7 @@
 import { createClient } from 'redis';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
 const client = createClient({ url: redisUrl });
@@ -11,6 +14,8 @@ client.on('error', (err) => {
 client.connect().catch((err) => {
   console.error('Redis connection error:', err);
 });
+
+export const isRedisReady = () => client.isReady;
 
 const get = async (key) => {
   try {
@@ -37,4 +42,14 @@ const del = async (key) => {
   }
 };
 
-export default { get, set, del };
+const delByPrefix = async (prefix) => {
+  try {
+    for await (const key of client.scanIterator({ MATCH: `${prefix}*`, COUNT: 100 })) {
+      await client.del(key);
+    }
+  } catch (e) {
+    console.error('Redis prefix deletion error:', e);
+  }
+};
+
+export default { get, set, del, delByPrefix };

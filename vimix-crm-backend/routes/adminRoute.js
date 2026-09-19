@@ -12,11 +12,13 @@ import {
 import { requireRole } from '../middleware/verifyPartner.js';
 
 const router = express.Router();
+const rejectPublicSignup = (req, res) => res.status(403).json({ message: 'Public signup is disabled' });
+const publicSignup = process.env.NODE_ENV !== 'production' || process.env.ALLOW_PUBLIC_SIGNUP === 'true';
 
 // Public auth endpoints
 router.post('/login', loginAdmin);
-router.post('/register', registerAdmin);
-router.post('/signup', registerAdmin);
+router.post('/register', publicSignup ? registerAdmin : rejectPublicSignup);
+router.post('/signup', publicSignup ? registerAdmin : rejectPublicSignup);
 router.post('/create', createAdmin);
 
 // Admin-only partner management
