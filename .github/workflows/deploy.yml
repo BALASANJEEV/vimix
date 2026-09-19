@@ -1,0 +1,120 @@
+name: Production Deploy – EC2 Docker
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    env:
+      REGION: ap-south-1
+      ECR_REGISTRY: 759204735992.dkr.ecr.ap-south-1.amazonaws.com/vimix
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.REGION }}
+          role-to-assume: arn:aws:iam::759204735992:role/vimix-ec2-role
+          role-session-name: github-actions-ec2-deploy
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Determine image tag
+        id: vars
+        run: |
+          echo "IMAGE_TAG=${GITHUB_SHA::12}" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image
+        run: |
+          docker build -t $ECR_REGISTRY:${{ steps.vars.outputs.IMAGE_TAG }} .
+        # Dockerfile is located at the repository root as per the contract.
+
+      - name: Push image to ECR
+        run: |
+          docker push $ECR_REGISTRY:${{ steps.vars.outputs.IMAGE_TAG }}
+
+  deploy-to-ec2:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    env:
+      REGION: ap-south-1
+      ECR_REGISTRY: 759204735992.dkr.ecr.ap-south-1.amazonaws.com/vimix
+      INSTANCE_ID: i-06fe1180d7d116b98
+      PUBLIC_URL: http://65.0.224.53
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.REGION }}
+          role-to-assume: arn:aws:iam::759204735992:role/vimix-ec2-role
+          role-session-name: github-actions-ec2-deploy
+
+      - name: Set image variables
+        id: img
+        run: |
+          IMAGE_TAG=${GITHUB_SHA::12}
+          IMAGE_URI="${ECR_REGISTRY}:${IMAGE_TAG}"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_OUTPUT
+
+      - name: Prepare SSM command payload
+        run: |
+          cat > /tmp/ssm-params.json << 'SSMPARAMS'
+          {
+            "commands": [
+              "aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REGISTRY",
+              "docker pull $IMAGE_URI",
+              "docker stop app || true",
+              "docker rm app || true",
+              "docker run -d --restart always -p 80:80 --name app $IMAGE_URI"
+            ]
+          }
+          SSMPARAMS
+
+      - name: Execute deployment on EC2 via SSM
+        id: ssm
+        run: |
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --region "$REGION" \
+            --document-name "AWS-RunShellScript" \
+            --parameters file:///tmp/ssm-params.json \
+            --query "Command.CommandId" \
+            --output text)
+          echo "command_id=$COMMAND_ID" >> $GITHUB_OUTPUT
+
+      - name: Wait for SSM command to finish
+        run: |
+          aws ssm wait command-executed \
+            --command-id "${{ steps.ssm.outputs.command_id }}" \
+            --instance-id "$INSTANCE_ID" \
+            --region "$REGION"
+
+      - name: Verify service health
+        run: |
+          echo "Waiting for the application health endpoint to become ready..."
+          for i in {1..12}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PUBLIC_URL/health/ready" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Health check passed (200)."
+              exit 0
+            fi
+            echo "Attempt $i: received HTTP $STATUS – retrying in 10s..."
+            sleep 10
+          done
+          echo "Health check failed after multiple attempts."
+          exit 1
