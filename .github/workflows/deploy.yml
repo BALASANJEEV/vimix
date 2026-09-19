@@ -1,9 +1,8 @@
-# Workflow for building, deploying, and verifying the Vimix CRM application on EC2 via Docker
 name: Deploy Vimix CRM to EC2
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 env:
@@ -42,7 +41,9 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }},${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
+          tags: |
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
           build-args: |
             VITE_API_URL=
           cache-from: type=gha
@@ -94,7 +95,6 @@ jobs:
           }
           SSMPARAMS
 
-          # Replace environment variables in the JSON commands
           sed -i "s/\$REGION/$REGION/g" /tmp/ssm-params.json
           sed -i "s|\$ECR_REGISTRY|$ECR_REGISTRY|g" /tmp/ssm-params.json
           sed -i "s|\$IMAGE_URI|$IMAGE_URI|g" /tmp/ssm-params.json
@@ -109,25 +109,40 @@ jobs:
 
           echo "SSM Command ID: $COMMAND_ID"
 
-          # Wait for command to finish
-          sleep 30
-          aws ssm list-command-invocations \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$INSTANCE_ID" \
-            --region "$REGION" \
-            --details \
-            --query "CommandInvocations[0].CommandPlugins[0].{Status:Status,Output:Output}" \
-            --output json
+  verify:
+    name: Verify Deployment
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - name: Wait for container to start
+        run: sleep 30
 
-      - name: Verify deployment health
+      - name: Verify application health
         run: |
-          echo "Waiting for container to start..."
-          sleep 15
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 http://13.201.233.85/health/ready || echo "000")
-          if [ "$HTTP_STATUS" != "200" ]; then
-            echo "Health check failed with status: $HTTP_STATUS"
-            curl -s --max-time 10 http://13.201.233.85/health/ready || echo "curl failed"
+          PUBLIC_URL="http://13.201.233.85"
+          echo "Checking health at $PUBLIC_URL/health..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PUBLIC_URL/health" || echo "000")
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "Health check failed with status $HTTP_STATUS"
             exit 1
           fi
-          echo "Deployment verified successfully - HTTP 200 from /health/ready"
-          echo "Application URL: http://13.201.233.85"
+          echo "Health check passed (HTTP $HTTP_STATUS)"
+
+      - name: Verify frontend serves
+        run: |
+          PUBLIC_URL="http://13.201.233.85"
+          echo "Checking frontend at $PUBLIC_URL..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PUBLIC_URL" || echo "000")
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "Frontend check failed with status $HTTP_STATUS"
+            exit 1
+          fi
+          echo "Frontend check passed (HTTP $HTTP_STATUS)"
+
+      - name: Deployment successful
+        run: |
+          echo "======================================"
+          echo "Vimix CRM deployed successfully!"
+          echo "URL: http://13.201.233.85"
+          echo "Health: http://13.201.233.85/health"
+          echo "======================================"
