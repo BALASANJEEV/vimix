@@ -10,8 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       REGION: ap-south-1
-      ECR_REGISTRY: 759204735992.dkr.ecr.ap-south-1.amazonaws.com
-      ECR_REPOSITORY: vimix
+      ECR_REPOSITORY_URI: 759204735992.dkr.ecr.ap-south-1.amazonaws.com/vimix
       INSTANCE_ID: i-09cb51a6f25842967
       PUBLIC_URL: http://15.207.49.159
       CONTAINER_PORT: 80
@@ -37,20 +36,21 @@ jobs:
       - name: Build and push Docker image
         id: build-push
         env:
-          ECR_REGISTRY: ${{ env.ECR_REGISTRY }}
-          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          ECR_REPOSITORY_URI: ${{ env.ECR_REPOSITORY_URI }}
         run: |
           set -e
-          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}"
-          echo "Full image URI: ${IMAGE_URI}"
-          echo "Building ${IMAGE_URI}:${GITHUB_SHA} (and :latest) ..."
+          IMAGE_URI="${ECR_REPOSITORY_URI}"
+          echo "Building image ${IMAGE_URI}:${GITHUB_SHA} and ${IMAGE_URI}:latest"
           docker build \
+            --file Dockerfile \
             --tag "${IMAGE_URI}:${GITHUB_SHA}" \
             --tag "${IMAGE_URI}:latest" \
             .
-          echo "Pushing tags..."
+
+          echo "Pushing image tags..."
           docker push "${IMAGE_URI}:${GITHUB_SHA}"
           docker push "${IMAGE_URI}:latest"
+
           echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
 
       - name: Deploy to EC2 via SSM
@@ -58,14 +58,13 @@ jobs:
           REGION: ${{ env.REGION }}
           INSTANCE_ID: ${{ env.INSTANCE_ID }}
           IMAGE_URI: ${{ steps.build-push.outputs.image_uri }}:latest
-          ECR_REGISTRY: ${{ env.ECR_REGISTRY }}
+          ECR_REPOSITORY_URI: ${{ env.ECR_REPOSITORY_URI }}
         run: |
           set -e
-          # write the SSM command payload to a temporary file
           cat > /tmp/ssm-params.json << EOF
           {
             "commands": [
-              "aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REGISTRY",
+              "aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REPOSITORY_URI",
               "docker pull $IMAGE_URI",
               "docker stop app || true",
               "docker rm app || true",
@@ -74,7 +73,6 @@ jobs:
           }
           EOF
 
-          # send the command
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --region "$REGION" \
@@ -83,10 +81,8 @@ jobs:
             --query "Command.CommandId" \
             --output text)
 
-          echo "SSM command sent, ID: $COMMAND_ID"
+          echo "SSM command sent (ID: $COMMAND_ID). Waiting for completion..."
 
-          # wait for command to finish
-          echo "Waiting for SSM command to complete..."
           while true; do
             STATUS=$(aws ssm list-command-invocations \
               --command-id "$COMMAND_ID" \
@@ -95,33 +91,32 @@ jobs:
               --details \
               --query "CommandInvocations[0].Status" \
               --output text)
-            echo "Current status: $STATUS"
+            echo "Current SSM status: $STATUS"
             if [[ "$STATUS" == "Success" ]]; then
-              echo "Deployment command succeeded."
+              echo "Deployment succeeded."
               break
             elif [[ "$STATUS" == "Failed" || "$STATUS" == "Cancelled" || "$STATUS" == "TimedOut" ]]; then
-              echo "Deployment command failed with status $STATUS."
+              echo "Deployment failed with status $STATUS."
               exit 1
             else
               sleep 5
             fi
           done
 
-      - name: Verify deployment (HTTP 200)
+      - name: Wait for service readiness
         env:
           PUBLIC_URL: ${{ env.PUBLIC_URL }}
         run: |
           set -e
-          echo "Waiting for the service to become reachable at $PUBLIC_URL ..."
-          for i in $(seq 1 30); do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$PUBLIC_URL" || echo "000")
-            if [ "$HTTP_CODE" = "200" ]; then
-              echo "✅ Service responded with HTTP 200."
+          echo "Waiting for HTTP 200 on ${PUBLIC_URL}/health ..."
+          for i in {1..30}; do
+            HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" "${PUBLIC_URL}/health" || echo "000")
+            if [[ "$HTTP_CODE" == "200" ]]; then
+              echo "Health check passed."
               exit 0
-            else
-              echo "Attempt $i: HTTP $HTTP_CODE – retrying in 10s..."
-              sleep 10
             fi
+            echo "Attempt $i: received $HTTP_CODE, retrying in 5s..."
+            sleep 5
           done
-          echo "❌ Service did not return HTTP 200 after multiple attempts."
+          echo "Health check failed after multiple attempts."
           exit 1
