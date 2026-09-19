@@ -1,0 +1,109 @@
+name: Build and Deploy Vimix CRM to EC2 Docker
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REGISTRY: 759204735992.dkr.ecr.ap-south-1.amazonaws.com
+  ECR_REPOSITORY: vimix
+  INSTANCE_ID: i-051a72d937863f0db
+  PUBLIC_URL: http://13.234.210.33
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::759204735992:role/vimix-ec2-role
+          aws-region: ap-south-1
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build diagnostics
+        run: |
+          echo "Dockerfile present at repo root:"
+          ls -la Dockerfile
+          echo "Frontend:"
+          ls vimix-crm-frontend/package.json
+          echo "Backend:"
+          ls vimix-crm-backend/package.json
+          docker version
+
+      - name: Build and push image
+        run: |
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:${GITHUB_SHA::12}"
+          FULL_IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+          echo "Building $IMAGE_URI"
+          docker build -t "$IMAGE_URI" -t "$FULL_IMAGE" -f Dockerfile .
+          docker push "$IMAGE_URI"
+          docker push "$FULL_IMAGE"
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+
+      - name: Build summary
+        run: |
+          echo "Image pushed: $IMAGE_URI"
+          docker images | head -5
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::759204735992:role/vimix-ec2-role
+          aws-region: ap-south-1
+
+      - name: Deploy container via SSM
+        run: |
+          REGION="$AWS_REGION"
+          INSTANCE_ID="$INSTANCE_ID"
+          ECR_REGISTRY="$ECR_REGISTRY"
+          IMAGE_URI="$IMAGE_URI"
+          cat > /tmp/ssm-params.json << 'SSMPARAMS'
+          {
+            "commands": [
+              "aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REGISTRY",
+              "docker pull $IMAGE_URI",
+              "docker stop app || true",
+              "docker rm app || true",
+              "docker run -d --restart always -p 80:80 --name app --env PORT=5000 --env NODE_ENV=production $IMAGE_URI"
+            ]
+          }
+          SSMPARAMS
+          COMMAND_ID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" --region "$REGION" --document-name "AWS-RunShellScript" --parameters file:///tmp/ssm-params.json --query "Command.CommandId" --output text)
+          echo "SSM Command ID: $COMMAND_ID"
+          aws ssm wait command-executed --instance-id "$INSTANCE_ID" --command-id "$COMMAND_ID" --region "$REGION" || true
+          aws ssm get-command-invocation --instance-id "$INSTANCE_ID" --command-id "$COMMAND_ID" --region "$REGION" --query "[Status,Output]" --output text
+
+  verify:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Health check
+        run: |
+          for i in $(seq 1 20); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$PUBLIC_URL/health" || true)
+            echo "Attempt $i: HTTP $CODE"
+            if [ "$CODE" = "200" ]; then
+              echo "Health check passed"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "Health check failed"
+          exit 1
