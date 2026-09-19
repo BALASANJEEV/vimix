@@ -14,10 +14,12 @@ jobs:
       INSTANCE_ID: i-09cb51a6f25842967
       PUBLIC_URL: http://15.207.49.159
       CONTAINER_PORT: 80
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -29,9 +31,6 @@ jobs:
       - name: Login to Amazon ECR
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
 
       - name: Build and push Docker image
         id: build-push
@@ -47,18 +46,15 @@ jobs:
             --tag "${IMAGE_URI}:${IMAGE_TAG}" \
             --tag "${IMAGE_URI}:latest" \
             .
-
-          echo "Pushing image tags..."
+          echo "Pushing Docker images"
           docker push "${IMAGE_URI}:${IMAGE_TAG}"
           docker push "${IMAGE_URI}:latest"
-
           echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
 
       - name: Deploy image to EC2 via SSM
-        env:
-          IMAGE_URI: ${{ steps.build-push.outputs.image_uri }}:latest
         run: |
           set -e
+          IMAGE_URI="${ECR_REPOSITORY_URI}:latest"
           cat > /tmp/ssm-params.json << 'SSMPARAMS'
           {
             "commands": [
@@ -106,15 +102,15 @@ jobs:
           HEALTH_URL: "${PUBLIC_URL}/health"
         run: |
           set -e
-          echo "Waiting for the application to become healthy at $HEALTH_URL ..."
+          echo "Waiting for health endpoint ${HEALTH_URL}..."
           for i in {1..30}; do
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "000")
-            if [[ "$HTTP_CODE" == "200" ]]; then
-              echo "Health check passed (HTTP 200)."
+            if [ "$HTTP_CODE" -eq 200 ]; then
+              echo "Health check passed."
               exit 0
             fi
-            echo "Attempt $i: Received HTTP $HTTP_CODE, retrying in 5s..."
-            sleep 5
+            echo "Attempt $i: received HTTP $HTTP_CODE, retrying in 10s..."
+            sleep 10
           done
           echo "Health check failed after multiple attempts."
           exit 1
