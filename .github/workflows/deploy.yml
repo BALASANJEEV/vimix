@@ -75,8 +75,6 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Deploy via SSM on EC2
-        env:
-          IMAGE_URI: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
         run: |
           REGION="${{ env.REGION }}"
           ECR_REGISTRY="${{ env.ECR_REGISTRY }}"
@@ -90,7 +88,7 @@ jobs:
               "docker pull $IMAGE_URI",
               "docker stop app || true",
               "docker rm app || true",
-              "docker run -d --restart always -p 80:80 --name app $IMAGE_URI"
+              "docker run -d --restart always -p 80:80 --name app -e NODE_ENV=production $IMAGE_URI"
             ]
           }
           SSMPARAMS
@@ -109,40 +107,84 @@ jobs:
 
           echo "SSM Command ID: $COMMAND_ID"
 
+          # Wait for deployment to complete
+          sleep 15
+          aws ssm wait command-executed \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --region "$REGION" || true
+
   verify:
     name: Verify Deployment
     runs-on: ubuntu-latest
     needs: deploy
+    permissions:
+      id-token: write
+      contents: read
+
     steps:
-      - name: Wait for container to start
-        run: sleep 30
+      - name: Wait for container to be ready
+        run: sleep 20
 
       - name: Verify application health
         run: |
-          PUBLIC_URL="http://13.201.233.85"
-          echo "Checking health at $PUBLIC_URL/health..."
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PUBLIC_URL/health" || echo "000")
-          if [ "$HTTP_STATUS" -ne 200 ]; then
-            echo "Health check failed with status $HTTP_STATUS"
-            exit 1
-          fi
-          echo "Health check passed (HTTP $HTTP_STATUS)"
+          HEALTH_URL="http://13.201.233.85/health"
+          echo "Checking health at $HEALTH_URL"
+          
+          for i in $(seq 1 12); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "000")
+            echo "Attempt $i: HTTP $HTTP_CODE"
+            
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Health check passed!"
+              echo "Full response:"
+              curl -s "$HEALTH_URL"
+              exit 0
+            fi
+            
+            if [ "$i" -lt 12 ]; then
+              echo "Waiting 10 seconds before retry..."
+              sleep 10
+            fi
+          done
+          
+          echo "Health check failed after 12 attempts"
+          echo "Last response:"
+          curl -v "$HEALTH_URL" || true
+          exit 1
 
-      - name: Verify frontend serves
+      - name: Verify frontend is serving
         run: |
-          PUBLIC_URL="http://13.201.233.85"
-          echo "Checking frontend at $PUBLIC_URL..."
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PUBLIC_URL" || echo "000")
-          if [ "$HTTP_STATUS" -ne 200 ]; then
-            echo "Frontend check failed with status $HTTP_STATUS"
-            exit 1
-          fi
-          echo "Frontend check passed (HTTP $HTTP_STATUS)"
+          FRONTEND_URL="http://13.201.233.85/"
+          echo "Checking frontend at $FRONTEND_URL"
+          
+          for i in $(seq 1 6); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$FRONTEND_URL" || echo "000")
+            echo "Attempt $i: HTTP $HTTP_CODE"
+            
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Frontend is serving correctly!"
+              exit 0
+            fi
+            
+            if [ "$i" -lt 6 ]; then
+              echo "Waiting 10 seconds before retry..."
+              sleep 10
+            fi
+          done
+          
+          echo "Frontend check failed after 6 attempts"
+          curl -v "$FRONTEND_URL" || true
+          exit 1
 
-      - name: Deployment successful
+      - name: Deployment summary
         run: |
-          echo "======================================"
-          echo "Vimix CRM deployed successfully!"
-          echo "URL: http://13.201.233.85"
-          echo "Health: http://13.201.233.85/health"
-          echo "======================================"
+          echo "============================================"
+          echo "✅ Deployment verified successfully"
+          echo "============================================"
+          echo "Application URL: http://13.201.233.85"
+          echo "Health endpoint: http://13.201.233.85/health"
+          echo "Docker Image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
+          echo "EC2 Instance: ${{ env.INSTANCE_ID }}"
+          echo "Region: ${{ env.REGION }}"
+          echo "============================================"
