@@ -36,32 +36,30 @@ jobs:
       - name: Build and push Docker image
         id: build-push
         env:
-          ECR_REPOSITORY_URI: ${{ env.ECR_REPOSITORY_URI }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           set -e
           IMAGE_URI="${ECR_REPOSITORY_URI}"
-          echo "Building image ${IMAGE_URI}:${GITHUB_SHA} and ${IMAGE_URI}:latest"
+          echo "Building Docker image ${IMAGE_URI}:${IMAGE_TAG} and ${IMAGE_URI}:latest"
           docker build \
+            --progress=plain \
             --file Dockerfile \
-            --tag "${IMAGE_URI}:${GITHUB_SHA}" \
+            --tag "${IMAGE_URI}:${IMAGE_TAG}" \
             --tag "${IMAGE_URI}:latest" \
             .
 
           echo "Pushing image tags..."
-          docker push "${IMAGE_URI}:${GITHUB_SHA}"
+          docker push "${IMAGE_URI}:${IMAGE_TAG}"
           docker push "${IMAGE_URI}:latest"
 
           echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy to EC2 via SSM
+      - name: Deploy image to EC2 via SSM
         env:
-          REGION: ${{ env.REGION }}
-          INSTANCE_ID: ${{ env.INSTANCE_ID }}
           IMAGE_URI: ${{ steps.build-push.outputs.image_uri }}:latest
-          ECR_REPOSITORY_URI: ${{ env.ECR_REPOSITORY_URI }}
         run: |
           set -e
-          cat > /tmp/ssm-params.json << EOF
+          cat > /tmp/ssm-params.json << 'SSMPARAMS'
           {
             "commands": [
               "aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REPOSITORY_URI",
@@ -71,7 +69,7 @@ jobs:
               "docker run -d --restart always -p ${CONTAINER_PORT}:${CONTAINER_PORT} --name app $IMAGE_URI"
             ]
           }
-          EOF
+          SSMPARAMS
 
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
@@ -103,19 +101,19 @@ jobs:
             fi
           done
 
-      - name: Wait for service readiness
+      - name: Verify service health
         env:
-          PUBLIC_URL: ${{ env.PUBLIC_URL }}
+          HEALTH_URL: "${PUBLIC_URL}/health"
         run: |
           set -e
-          echo "Waiting for HTTP 200 on ${PUBLIC_URL}/health ..."
+          echo "Waiting for the application to become healthy at $HEALTH_URL ..."
           for i in {1..30}; do
-            HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" "${PUBLIC_URL}/health" || echo "000")
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "000")
             if [[ "$HTTP_CODE" == "200" ]]; then
-              echo "Health check passed."
+              echo "Health check passed (HTTP 200)."
               exit 0
             fi
-            echo "Attempt $i: received $HTTP_CODE, retrying in 5s..."
+            echo "Attempt $i: Received HTTP $HTTP_CODE, retrying in 5s..."
             sleep 5
           done
           echo "Health check failed after multiple attempts."
