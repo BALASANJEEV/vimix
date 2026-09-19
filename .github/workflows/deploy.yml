@@ -16,6 +16,7 @@ jobs:
     env:
       REGION: ap-south-1
       ECR_REGISTRY: 759204735992.dkr.ecr.ap-south-1.amazonaws.com/vimix
+      AWS_ROLE_ARN: arn:aws:iam::759204735992:role/vimix-ec2-role
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,7 +28,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.REGION }}
-          role-to-assume: arn:aws:iam::759204735992:role/vimix-ec2-role
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
           role-session-name: github-actions-ec2-deploy
 
       - name: Log in to Amazon ECR
@@ -36,16 +37,16 @@ jobs:
       - name: Determine image tag
         id: vars
         run: |
-          echo "IMAGE_TAG=${GITHUB_SHA::12}" >> $GITHUB_OUTPUT
+          IMAGE_TAG="${GITHUB_SHA::12}"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
       - name: Build Docker image
         run: |
-          docker build -t $ECR_REGISTRY:${{ steps.vars.outputs.IMAGE_TAG }} .
-        # Dockerfile is located at the repository root as per the contract.
+          docker build -t "$ECR_REGISTRY:${{ steps.vars.outputs.IMAGE_TAG }}" .
 
       - name: Push image to ECR
         run: |
-          docker push $ECR_REGISTRY:${{ steps.vars.outputs.IMAGE_TAG }}
+          docker push "$ECR_REGISTRY:${{ steps.vars.outputs.IMAGE_TAG }}"
 
   deploy-to-ec2:
     needs: build-and-push
@@ -55,18 +56,19 @@ jobs:
       ECR_REGISTRY: 759204735992.dkr.ecr.ap-south-1.amazonaws.com/vimix
       INSTANCE_ID: i-06fe1180d7d116b98
       PUBLIC_URL: http://65.0.224.53
+      AWS_ROLE_ARN: arn:aws:iam::759204735992:role/vimix-ec2-role
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.REGION }}
-          role-to-assume: arn:aws:iam::759204735992:role/vimix-ec2-role
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
           role-session-name: github-actions-ec2-deploy
 
       - name: Set image variables
         id: img
         run: |
-          IMAGE_TAG=${GITHUB_SHA::12}
+          IMAGE_TAG="${GITHUB_SHA::12}"
           IMAGE_URI="${ECR_REGISTRY}:${IMAGE_TAG}"
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_OUTPUT
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_OUTPUT
@@ -106,14 +108,14 @@ jobs:
 
       - name: Verify service health
         run: |
-          echo "Waiting for the application health endpoint to become ready..."
+          echo "Checking health endpoint at $PUBLIC_URL/health ..."
           for i in {1..12}; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PUBLIC_URL/health/ready" || echo "000")
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PUBLIC_URL/health" || echo "000")
             if [ "$STATUS" = "200" ]; then
-              echo "Health check passed (200)."
+              echo "Health check passed."
               exit 0
             fi
-            echo "Attempt $i: received HTTP $STATUS – retrying in 10s..."
+            echo "Attempt $i: received status $STATUS, retrying in 10s..."
             sleep 10
           done
           echo "Health check failed after multiple attempts."
