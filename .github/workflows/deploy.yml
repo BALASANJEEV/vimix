@@ -107,25 +107,26 @@ jobs:
 
           echo "SSM Command ID: $COMMAND_ID"
 
-          # Wait for deployment to complete
+          # Wait for command to complete
           sleep 15
           aws ssm wait command-executed \
             --command-id "$COMMAND_ID" \
             --instance-id "$INSTANCE_ID" \
             --region "$REGION"
 
-      - name: Verify deployment health
+      - name: Health check
         run: |
-          PUBLIC_URL="http://13.201.233.85"
-          echo "Checking application health at $PUBLIC_URL"
+          echo "Waiting for application to be ready..."
+          sleep 10
+          HEALTH_URL="http://13.201.233.85/health"
           for i in {1..12}; do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$PUBLIC_URL/health" || echo "000")
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "000")
             if [ "$HTTP_CODE" = "200" ]; then
               echo "Health check passed (HTTP 200)"
               exit 0
             fi
-            echo "Attempt $i: HTTP $HTTP_CODE, retrying in 10s..."
+            echo "Attempt $i: HTTP $HTTP_CODE - retrying in 10s"
             sleep 10
           done
-          echo "Health check failed after 12 attempts"
+          echo "Health check failed after 12 retries"
           exit 1
