@@ -47,6 +47,8 @@ jobs:
             --tag "$FULL_IMAGE:$GITHUB_SHA" \
             --tag "$FULL_IMAGE:latest" \
             --file Dockerfile .
+          echo "==> Build succeeded"
+          docker image inspect "$FULL_IMAGE:$GITHUB_SHA" --format 'Image {{.Id}} size={{.Size}}'
           echo "==> Pushing $FULL_IMAGE:$GITHUB_SHA"
           docker push "$FULL_IMAGE:$GITHUB_SHA"
           echo "==> Pushing $FULL_IMAGE:latest"
@@ -94,36 +96,28 @@ jobs:
             --command-id "$COMMAND_ID" \
             --region "$REGION"
 
-          STATUS=$(aws ssm list-command-invocations \
+          echo "==> Command output:"
+          aws ssm get-command-invocation \
             --instance-id "$INSTANCE_ID" \
             --command-id "$COMMAND_ID" \
             --region "$REGION" \
-            --query "CommandInvocations[0].Status" --output text)
+            --query '[Status,StandardOutputContent,StandardErrorContent]' \
+            --output text
 
-          echo "==> SSM command status: $STATUS"
-          if [ "$STATUS" != "Success" ]; then
-            aws ssm list-command-invocations \
-              --instance-id "$INSTANCE_ID" \
-              --command-id "$COMMAND_ID" \
-              --region "$REGION" \
-              --details \
-              --query "CommandInvocations[0].CommandPlugins" --output text || true
-            exit 1
-          fi
-
-      - name: Health check
+      - name: Verify deployment health
         run: |
           set -e
           URL="http://13.232.139.188/health"
-          echo "==> Checking $URL"
+          echo "==> Polling $URL"
           for i in $(seq 1 15); do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL" || true)
+            HTTP_CODE=$(curl -s -o /tmp/health-body.txt -w '%{http_code}' --max-time 10 "$URL" || echo "000")
             echo "Attempt $i: HTTP $HTTP_CODE"
             if [ "$HTTP_CODE" = "200" ]; then
-              echo "==> Health check passed"
+              echo "Health check passed:"
+              cat /tmp/health-body.txt
               exit 0
             fi
             sleep 10
           done
-          echo "==> Health check failed after retries"
+          echo "Health check failed after 15 attempts"
           exit 1
