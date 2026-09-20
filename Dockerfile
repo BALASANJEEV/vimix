@@ -4,7 +4,6 @@
 FROM node:20-alpine AS frontend-builder
 
 WORKDIR /app/frontend
-
 # Install frontend dependencies
 COPY vimix-crm-frontend/package*.json ./
 
