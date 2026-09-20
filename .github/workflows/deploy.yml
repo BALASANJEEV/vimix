@@ -95,9 +95,12 @@ jobs:
         run: |
           sleep 15
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ env.PUBLIC_URL }}/health || echo "000")
-          echo "Health endpoint HTTP status: $HTTP_STATUS"
+          echo ""
+          echo "========================================"
+          echo "Health check HTTP status: $HTTP_STATUS"
+          echo "========================================"
           if [ "$HTTP_STATUS" != "200" ]; then
-            echo "ERROR: Health check failed. Expected HTTP 200 but got $HTTP_STATUS"
+            echo "Health check failed!"
             exit 1
           fi
-          echo "Deployment verified successfully - health endpoint returning HTTP 200"
+          echo "Deployment verified successfully!"
