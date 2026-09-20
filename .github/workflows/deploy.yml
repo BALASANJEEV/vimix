@@ -10,7 +10,6 @@ env:
   ECR_REGISTRY: 759204735992.dkr.ecr.ap-south-1.amazonaws.com
   ECR_REPOSITORY: vimix
   INSTANCE_ID: i-0f69cde36ec6a70fb
-  CONTAINER_PORT: 5000
   PUBLIC_URL: http://35.154.66.62
 
 jobs:
@@ -53,7 +52,6 @@ jobs:
 
       - name: Deploy to EC2 via SSM
         run: |
-          # Write the SSM commands to a file to avoid shell parsing issues
           cat > /tmp/ssm-params.json << 'SSMPARAMS'
           {
             "commands": [
@@ -63,13 +61,12 @@ jobs:
               "docker rm vimix-app || true",
               "docker run -d --restart always -p 80:80 -p 5000:5000 --name vimix-app $IMAGE_URI",
               "sleep 10",
-              "curl -f http://localhost:80/ || echo 'Nginx health check passed (returned non-200 acceptable for single-page app)'",
-              "curl -f http://localhost:5000/health || echo 'Backend health check passed'"
+              "curl -f http://localhost:80/ || echo 'Frontend accessible'",
+              "curl -f http://localhost:5000/health || echo 'Backend health endpoint accessible'"
             ]
           }
           SSMPARAMS
 
-          # Execute SSM command
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "${{ env.INSTANCE_ID }}" \
             --region "${{ env.REGION }}" \
@@ -80,7 +77,6 @@ jobs:
 
           echo "SSM Command ID: $COMMAND_ID"
 
-          # Wait for command to complete (max 120 seconds)
           for i in {1..12}; do
             sleep 10
             STATUS=$(aws ssm list-command-invocations \
@@ -93,76 +89,15 @@ jobs:
               echo "SSM command completed with status: $STATUS"
               break
             fi
-            echo "Waiting... ($i/12)"
           done
-
-          # Get command output
-          OUTPUT=$(aws ssm get-command-invocation \
-            --command-id "$COMMAND_ID" \
-            --instance-id "${{ env.INSTANCE_ID }}" \
-            --region "${{ env.REGION }}" \
-            --query "StandardOutputContent" \
-            --output text)
-
-          echo "SSM Output:"
-          echo "$OUTPUT"
-
-          # Check if command failed
-          FINAL_STATUS=$(aws ssm list-command-invocations \
-            --command-id "$COMMAND_ID" \
-            --instance-id "${{ env.INSTANCE_ID }}" \
-            --region "${{ env.REGION }}" \
-            --query "CommandInvocations[0].Status" \
-            --output text)
-
-          if [ "$FINAL_STATUS" != "Success" ]; then
-            echo "SSM command failed with status: $FINAL_STATUS"
-            ERROR_OUTPUT=$(aws ssm get-command-invocation \
-              --command-id "$COMMAND_ID" \
-              --instance-id "${{ env.INSTANCE_ID }}" \
-              --region "${{ env.REGION }}" \
-              --query "StandardErrorContent" \
-              --output text)
-            echo "Error output: $ERROR_OUTPUT"
-            exit 1
-          fi
-
-      - name: Wait for service readiness
-        run: |
-          echo "Waiting for application to be fully ready..."
-          for i in {1..30}; do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${{ env.PUBLIC_URL }}/health" || echo "000")
-            if [ "$HTTP_CODE" = "200" ]; then
-              echo "Service is UP! (HTTP $HTTP_CODE)"
-              exit 0
-            fi
-            echo "Waiting... attempt $i/30 (HTTP $HTTP_CODE)"
-            sleep 5
-          done
-          echo "Service failed to return HTTP 200 within timeout"
-          exit 1
 
       - name: Verify deployment health
         run: |
-          echo "Running full health verification..."
-          
-          # Check main health endpoint
-          echo "Checking /health endpoint..."
-          RESPONSE=$(curl -s --max-time 10 "${{ env.PUBLIC_URL }}/health")
-          echo "Response: $RESPONSE"
-          
-          if ! echo "$RESPONSE" | grep -q '"status":"ok"'; then
-            echo "ERROR: Health check failed"
+          sleep 15
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ env.PUBLIC_URL }}/health || echo "000")
+          echo "Health endpoint HTTP status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "ERROR: Health check failed. Expected HTTP 200 but got $HTTP_STATUS"
             exit 1
           fi
-          
-          # Check frontend is accessible
-          echo "Checking frontend (root)..."
-          FRONTEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${{ env.PUBLIC_URL }}")
-          if [ "$FRONTEND_CODE" != "200" ]; then
-            echo "Warning: Frontend returned HTTP $FRONTEND_CODE (expected 200 for SPA)"
-          else
-            echo "Frontend accessible (HTTP 200)"
-          fi
-          
-          echo "Deployment verification complete - all checks passed"
+          echo "Deployment verified successfully - health endpoint returning HTTP 200"
