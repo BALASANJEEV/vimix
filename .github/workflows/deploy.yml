@@ -1,5 +1,4 @@
 name: Build & Deploy to EC2 Docker
-
 on:
   push:
     branches: ["main"]
@@ -43,7 +42,7 @@ jobs:
             -t "${IMAGE_URI}:${GITHUB_SHA}" \
             -t "${IMAGE_URI}:latest" \
             .
-          echo "Pushing image tags..."
+          echo "Pushing Docker image tags..."
           docker push "${IMAGE_URI}:${GITHUB_SHA}"
           docker push "${IMAGE_URI}:latest"
           echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
@@ -57,7 +56,6 @@ jobs:
           ECR_REGISTRY="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${REGION}.amazonaws.com"
           IMAGE_URI="${ECR_REGISTRY}/vimix:latest"
 
-          # Prepare SSM command payload
           cat > /tmp/ssm-params.json << 'SSMPARAMS'
           {
             "commands": [
@@ -70,12 +68,10 @@ jobs:
           }
           SSMPARAMS
 
-          # Export variables for the SSM script
           export REGION="${REGION}"
           export ECR_REGISTRY="${ECR_REGISTRY}"
           export IMAGE_URI="${IMAGE_URI}"
 
-          # Send command
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "${INSTANCE_ID}" \
             --region "${REGION}" \
@@ -86,13 +82,12 @@ jobs:
 
           echo "SSM command sent, ID: $COMMAND_ID"
 
-          # Wait for command to finish
           aws ssm wait command-executed \
             --command-id "$COMMAND_ID" \
             --instance-id "${INSTANCE_ID}" \
             --region "${REGION}"
 
-          echo "Deployment command completed."
+          echo "Deployment completed on EC2 instance."
 
       - name: Verify health endpoint
         env:
@@ -106,7 +101,7 @@ jobs:
               echo "Health check passed (HTTP 200)."
               exit 0
             fi
-            echo "Attempt $i: health endpoint returned $STATUS, retrying in 10s..."
+            echo "Attempt $i: Health check returned $STATUS, retrying in 10s..."
             sleep 10
           done
           echo "Health check failed after multiple attempts."
