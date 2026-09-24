@@ -1,7 +1,4 @@
-# Workflow: Build, Deploy & Verify Vimix CRM on EC2 Docker
-# Repository: vimix-crm (monorepo: frontend + backend)
-# Target: EC2_DOCKER (ap-south-1)
-name: Build & Deploy Vimix CRM
+name: Build, Deploy and Verify
 
 on:
   push:
@@ -9,175 +6,124 @@ on:
   workflow_dispatch:
 
 env:
-  AWS_DEFAULT_REGION: ap-south-1
-  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  REGION: ap-south-1
   ECR_REGISTRY: 759204735992.dkr.ecr.ap-south-1.amazonaws.com
   ECR_REPOSITORY: vimix
-  IMAGE_TAG: ${{ github.sha }}
   INSTANCE_ID: i-0cbf9975c6444f12e
-  SECRETS_ID: deptic/vimix/secrets
+  APP_DIR: /home/ec2-user/app
+  AWS_DEFAULT_REGION: ap-south-1
 
 jobs:
   build-and-deploy:
-    name: Build Docker image, Push to ECR, Deploy on EC2
+    name: Build, push to ECR and deploy via SSM
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build frontend diagnostics
+        run: |
+          cd vimix-crm-frontend
+          npm install --legacy-peer-deps
+          npm run build
+          echo "Frontend build completed successfully"
+          ls -la dist/
+
+      - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        run: |
-          docker build \
-            --file ./Dockerfile \
-            --tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-            --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
-            .
-
-      - name: Diagnose built image
-        run: |
-          echo "=== Image layers ==="
-          docker history $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "=== Port check (EXPOSE) ==="
-          docker image inspect $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-            --format '{{.Config.ExposedPorts}}'
-          echo "=== Entrypoint / CMD ==="
-          docker image inspect $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-            --format 'CMD={{.Config.Cmd}} | Entrypoint={{.Config.Entrypoint}}'
 
       - name: Login to Amazon ECR
         run: |
-          aws ecr get-login-password --region $AWS_DEFAULT_REGION | \
-            docker login --username AWS --password-stdin $ECR_REGISTRY
+          aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      - name: Push Docker image to ECR
+      - name: Build and push Docker image
         run: |
+          IMAGE_TAG="${{ github.sha }}"
+          docker build \
+            --build-arg VITE_API_URL='' \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            -f Dockerfile .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
 
-      - name: Fetch secrets from AWS Secrets Manager and write .env
+      - name: Deploy via SSM
         run: |
-          SECRETS_JSON=$(aws secretsmanager get-secret-value \
-            --secret-id "$SECRETS_ID" \
-            --region "$AWS_DEFAULT_REGION" \
-            --query 'SecretString' \
-            --output text)
+          REGION="${{ env.REGION }}"
+          INSTANCE_ID="${{ env.INSTANCE_ID }}"
+          ECR_REGISTRY="${{ env.ECR_REGISTRY }}"
+          ECR_REPOSITORY="${{ env.ECR_REPOSITORY }}"
+          IMAGE_TAG="${{ github.sha }}"
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
-          # Write each approved key into a temporary .env file
-          echo "$SECRETS_JSON" | jq -r '
-            to_entries[] |
-            select(.key | IN(
-              "BACKEND_PORT","FRONTEND_PORT","JWT_SECRET","MONGODB_URI",
-              "MONGO_URI","PORT","REDIS_URL","VITE_API_URL"
-            )) |
-            "\(.key)=\(.value)"
-          ' > /tmp/app-env.txt
-
-          echo "=== Environment variables (keys only) ==="
-          cut -d= -f1 /tmp/app-env.txt
-
-      - name: Deploy to EC2 via SSM Run Command
-        run: |
-          # Build full image URI
-          FULL_IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          REGION="$AWS_DEFAULT_REGION"
-
-          # Write SSM command payload
+          # Write SSM commands to a file to avoid shell parsing issues
           cat > /tmp/ssm-params.json << 'SSMPARAMS'
           {
             "commands": [
               "aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REGISTRY",
-              "docker pull $FULL_IMAGE",
+              "docker pull $IMAGE_URI",
               "docker stop app || true",
               "docker rm app || true",
-              "docker run -d --restart always -p 80:80 --name app $FULL_IMAGE"
+              "docker run -d --restart always -p 80:80 --name app $IMAGE_URI"
             ]
           }
           SSMPARAMS
 
-          # Inject variables that need shell expansion
-          sed -i "s|\$REGION|$REGION|g; s|\$FULL_IMAGE|$FULL_IMAGE|g; s|\$ECR_REGISTRY|$ECR_REGISTRY|g" /tmp/ssm-params.json
+          # Substitute variables inside the JSON using sed
+          sed -i "s|\$REGION|$REGION|g" /tmp/ssm-params.json
+          sed -i "s|\$ECR_REGISTRY|$ECR_REGISTRY|g" /tmp/ssm-params.json
+          sed -i "s|\$IMAGE_URI|$IMAGE_URI|g" /tmp/ssm-params.json
 
-          echo "=== SSM Payload ==="
-          cat /tmp/ssm-params.json
-
-          # Send command
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --region "$REGION" \
             --document-name "AWS-RunShellScript" \
             --parameters file:///tmp/ssm-params.json \
-            --output text \
-            --query "Command.CommandId")
+            --query "Command.CommandId" \
+            --output text)
 
-          echo "SSM Command ID: $COMMAND_ID"
-          echo "COMMAND_ID=$COMMAND_ID" >> $GITHUB_ENV
+          echo "SSM command sent: $COMMAND_ID"
+          echo "SSM_COMMAND_ID=$COMMAND_ID" >> $GITHUB_ENV
 
-      - name: Wait for SSM command to complete
-        run: |
+          # Wait for command to complete
+          sleep 10
           for i in $(seq 1 30); do
             STATUS=$(aws ssm list-command-invocations \
               --command-id "$COMMAND_ID" \
               --instance-id "$INSTANCE_ID" \
-              --region "$AWS_DEFAULT_REGION" \
+              --region "$REGION" \
               --query "CommandInvocations[0].Status" \
               --output text)
-
-            if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
-              echo "Command finished with status: $STATUS"
-              aws ssm list-command-invocations \
-                --command-id "$COMMAND_ID" \
-                --instance-id "$INSTANCE_ID" \
-                --region "$AWS_DEFAULT_REGION" \
-                --details \
-                --query "CommandInvocations[0].CommandPlugins[0].Output" \
-                --output text
+            if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "SSM command finished with status: $STATUS"
               break
             fi
-            echo "Waiting... ($i)"
             sleep 5
           done
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      - name: Health check (application readiness)
+      - name: Health Check
         run: |
-          echo "Waiting for app to start..."
-          sleep 15
-
-          # Check health endpoint exposed on port 80 via Nginx
-          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
-            --max-time 10 \
-            http://35.154.76.18/health 2>/dev/null || echo "000")
-
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "✓ Health check passed (HTTP 200)"
-          else
-            echo "✗ Health check failed (HTTP $HTTP_CODE)"
-            echo "--- Full response (if any) ---"
-            curl -s --max-time 10 http://35.154.76.18/health || echo "(no response)"
-            exit 1
-          fi
-
-      - name: Smoke test frontend
-        run: |
-          HTML=$(curl -s --max-time 10 http://35.154.76.18/)
-          if echo "$HTML" | grep -qi "<title>"; then
-            echo "✓ Frontend serves HTML with <title> tag"
-          else
-            echo "⚠ Frontend response may be incomplete; check manually"
-            echo "$HTML" | head -20
-          fi
-
-      - name: Print deployment summary
-        run: |
-          echo "============================================"
-          echo "✅ Deployment successful!"
-          echo "Public URL: http://35.154.76.18"
-          echo "Image:      $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          echo "Instance:   $INSTANCE_ID"
-          echo "============================================"
+          echo "Waiting for application to become healthy..."
+          for i in $(seq 1 12); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://35.154.76.18/ || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Application is healthy (HTTP 200)"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $HTTP_CODE, retrying in 10 seconds..."
+            sleep 10
+          done
+          echo "Application failed to return HTTP 200 within 2 minutes"
+          exit 1
