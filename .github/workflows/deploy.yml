@@ -1,4 +1,4 @@
-name: Deploy Vimix CRM to EC2
+name: Deploy vimix CRM to EC2
 
 on:
   push:
@@ -11,73 +11,77 @@ env:
   ECR_REPOSITORY: vimix
   INSTANCE_ID: i-0cbf9975c6444f12e
   IMAGE_TAG: ${{ github.sha }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: ap-south-1
 
 jobs:
-  build-deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
+      - name: Docker Setup Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Configure AWS credentials
-        run: |
-          mkdir -p ~/.aws
-          cat > ~/.aws/credentials << EOF
-          [default]
-          aws_access_key_id = ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws_secret_access_key = ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          EOF
-          cat > ~/.aws/config << EOF
-          [default]
-          region = ${{ env.REGION }}
-          output = json
-          EOF
 
       - name: Login to Amazon ECR
         run: |
-          aws ecr get-login-password --region ${{ env.REGION }} | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+          aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
       - name: Get secrets from AWS Secrets Manager
         run: |
-          SECRETS=$(aws secretsmanager get-secret-value --secret-id deptic/vimix/secrets --region ${{ env.REGION }} --query SecretString --output text)
-          echo "VITE_API_URL=$(echo $SECRETS | jq -r '.VITE_API_URL // \"http://35.154.76.18/api\"')" >> "$GITHUB_ENV"
-          echo "MONGODB_URI=$(echo $SECRETS | jq -r '.MONGODB_URI')" >> "$GITHUB_ENV"
-          echo "JWT_SECRET=$(echo $SECRETS | jq -r '.JWT_SECRET')" >> "$GITHUB_ENV"
+          SECRETS=$(aws secretsmanager get-secret-value --secret-id deptic/vimix/secrets --query SecretString --output text)
+          echo "$SECRETS" | jq -r 'to_entries | .[] | .key + "=" + .value' >> .env.build
+          cat .env.build
+
+      - name: Extract VITE_API_URL from secrets
+        id: api_url
+        run: |
+          grep VITE_API_URL .env.build || echo "VITE_API_URL=" >> .env.build
+          echo "api_url=$(grep VITE_API_URL .env.build | cut -d= -f2-)" >> $GITHUB_OUTPUT
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: |
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
-          build-args: |
-            VITE_API_URL=${{ env.VITE_API_URL }}
-
-      - name: Deploy to EC2 via SSM
         run: |
-          FULL_IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker build \
+            --build-arg VITE_API_URL="${{ steps.api_url.outputs.api_url }}" \
+            -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
+      - name: Tag image as latest
+        run: |
+          LATEST_URI="$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+          docker tag "$IMAGE_URI" "$LATEST_URI"
+          docker push "$LATEST_URI"
+
+      - name: Write SSM parameters
+        run: |
           cat > /tmp/ssm-params.json << 'SSMPARAMS'
           {
             "commands": [
               "aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REGISTRY",
-              "docker pull $IMAGE_URI",
+              "docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG",
               "docker stop app || true",
               "docker rm app || true",
-              "docker run -d --restart always -p 80:80 --name app -e MONGODB_URI=$MONGODB_URI -e JWT_SECRET=$JWT_SECRET -e VITE_API_URL=$VITE_API_URL $IMAGE_URI"
+              "docker run -d --restart always -p 80:80 --name app $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
             ]
           }
           SSMPARAMS
 
+      - name: Deploy to EC2 via SSM
+        env:
+          REGION: ap-south-1
+          INSTANCE_ID: i-0cbf9975c6444f12e
+          IMAGE_TAG: ${{ github.sha }}
+          ECR_REGISTRY: 759204735992.dkr.ecr.ap-south-1.amazonaws.com
+          ECR_REPOSITORY: vimix
+        run: |
           COMMAND_ID=$(aws ssm send-command \
-            --instance-ids "${{ env.INSTANCE_ID }}" \
-            --region "${{ env.REGION }}" \
+            --instance-ids "$INSTANCE_ID" \
+            --region "$REGION" \
             --document-name "AWS-RunShellScript" \
             --parameters file:///tmp/ssm-params.json \
             --query "Command.CommandId" \
@@ -86,15 +90,16 @@ jobs:
           echo "SSM command ID: $COMMAND_ID"
 
           # Wait for command to complete
-          while true; do
+          sleep 10
+          for i in $(seq 1 30); do
             STATUS=$(aws ssm list-command-invocations \
               --command-id "$COMMAND_ID" \
-              --instance-id "${{ env.INSTANCE_ID }}" \
-              --region "${{ env.REGION }}" \
+              --instance-id "$INSTANCE_ID" \
+              --region "$REGION" \
               --query "CommandInvocations[0].Status" \
               --output text)
-            if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
-              echo "Command status: $STATUS"
+            if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "SSM command status: $STATUS"
               break
             fi
             sleep 5
@@ -102,14 +107,16 @@ jobs:
 
       - name: Health check
         run: |
-          for i in {1..30}; do
-            HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://35.154.76.18/health || echo "000")
+          echo "Waiting for application to start..."
+          sleep 15
+          for i in $(seq 1 12); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://35.154.76.18/ 2>/dev/null || echo "000")
             if [ "$HTTP_CODE" = "200" ]; then
-              echo "Health check passed (HTTP 200)"
+              echo "Health check passed - application is running"
               exit 0
             fi
-            echo "Attempt $i: HTTP $HTTP_CODE, retrying in 10s..."
+            echo "Attempt $i: HTTP $HTTP_CODE - retrying..."
             sleep 10
           done
-          echo "Health check failed after 30 attempts"
+          echo "Health check failed - application did not return HTTP 200"
           exit 1
