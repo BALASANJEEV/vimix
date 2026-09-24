@@ -1,4 +1,4 @@
-name: Deploy Vimix CRM to EC2
+name: Deploy Vimix CRM to EC2 via Docker
 
 on:
   push:
@@ -10,49 +10,65 @@ env:
   ECR_REGISTRY: 759204735992.dkr.ecr.ap-south-1.amazonaws.com
   ECR_REPOSITORY: vimix
   INSTANCE_ID: i-0cbf9975c6444f12e
-  PUBLIC_URL: http://35.154.76.18
+  IMAGE_TAG: ${{ github.sha }}
+  CONTAINER_PORT: 80
 
 jobs:
-  build-deploy:
-    name: Build & Deploy
+  build-and-deploy:
+    name: Build, Push, and Deploy
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Docker Buildx
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker image with tags
-        id: build
+      - name: Configure AWS credentials
         run: |
-          IMAGE_TAG="${{ github.sha }}-$(date +%Y%m%d%H%M%S)"
-          FULL_IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG"
-          echo "FULL_IMAGE=${FULL_IMAGE}" >> "$GITHUB_OUTPUT"
-          echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          mkdir -p ~/.aws
+          cat > ~/.aws/credentials << EOF
+          [default]
+          aws_access_key_id = ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key = ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          EOF
+          cat > ~/.aws/config << EOF
+          [default]
+          region = ${{ env.AWS_REGION }}
+          output = json
+          EOF
 
-          # Build the Docker image
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+
+      - name: Build and tag Docker image
+        run: |
+          FULL_IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}"
           docker build \
-            --build-arg VITE_API_URL=${{ env.PUBLIC_URL }} \
-            -t "$FULL_IMAGE" \
-            -f ${{ env.DOCKERFILE_PATH }} .
+            --build-arg VITE_API_URL="${{ secrets.VITE_API_URL }}" \
+            -t "$FULL_IMAGE:${{ env.IMAGE_TAG }}" \
+            -f Dockerfile .
+          docker tag "$FULL_IMAGE:${{ env.IMAGE_TAG }}" "$FULL_IMAGE:latest"
 
-      - name: Push to Amazon ECR
+      - name: Push Docker image to ECR
         run: |
-          # Get login password and authenticate Docker
-          aws ecr get-login-password --region "${{ env.AWS_REGION }}" | docker login --username AWS --password-stdin "${{ env.ECR_REGISTRY }}"
-          docker push "${{ steps.build.outputs.FULL_IMAGE }}"
+          FULL_IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}"
+          docker push "$FULL_IMAGE:${{ env.IMAGE_TAG }}"
+          docker push "$FULL_IMAGE:latest"
 
-      - name: Deploy via SSM
+      - name: Deploy via SSM to EC2 instance
         run: |
           REGION="${{ env.AWS_REGION }}"
           ECR_REGISTRY="${{ env.ECR_REGISTRY }}"
-          ECR_REPOSITORY="${{ env.ECR_REPOSITORY }}"
-          IMAGE_URI="${{ steps.build.outputs.FULL_IMAGE }}"
+          ECR_REPO="${{ env.ECR_REPOSITORY }}"
+          IMAGE_TAG="${{ env.IMAGE_TAG }}"
           INSTANCE_ID="${{ env.INSTANCE_ID }}"
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG"
+          SECRETS_ID="deptic/vimix/secrets"
 
-          # Write SSM parameters to a file
+          # Write SSM command payload to a file to avoid shell parsing bugs
           cat > /tmp/ssm-params.json << 'SSMPARAMS'
           {
             "commands": [
@@ -65,7 +81,6 @@ jobs:
           }
           SSMPARAMS
 
-          # Send command to SSM
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --region "$REGION" \
@@ -74,53 +89,20 @@ jobs:
             --query "Command.CommandId" \
             --output text)
 
-          echo "SSM Command ID: $COMMAND_ID"
+          echo "SSM command sent: $COMMAND_ID"
+          echo "COMMAND_ID=$COMMAND_ID" >> $GITHUB_ENV
 
-          # Wait up to 5 minutes for the command to complete
-          for i in $(seq 1 30); do
-            STATUS=$(aws ssm list-command-invocations \
-              --command-id "$COMMAND_ID" \
-              --instance-id "$INSTANCE_ID" \
-              --region "$REGION" \
-              --query "CommandInvocations[0].Status" \
-              --output text)
-            echo "Attempt $i: Status=$STATUS"
-            if [ "$STATUS" == "Success" ]; then
-              echo "Deployment command completed successfully"
-              exit 0
-            elif [ "$STATUS" == "Failed" ] || [ "$STATUS" == "TimedOut" ] || [ "$STATUS" == "Cancelled" ]; then
-              echo "Deployment command failed with status: $STATUS"
-              # Fetch command output for debugging
-              aws ssm get-command-invocation \
-                --command-id "$COMMAND_ID" \
-                --instance-id "$INSTANCE_ID" \
-                --region "$REGION" \
-                --output text
-              exit 1
-            fi
-            sleep 10
-          done
-
-          echo "Timed out waiting for deployment command"
-          exit 1
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
-
-      - name: Health Check
+      - name: Wait for deployment to complete
         run: |
-          echo "Waiting for container to start..."
-          sleep 15
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "${{ env.PUBLIC_URL }}/health" || echo "000")
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "Health check failed with HTTP $HTTP_CODE on ${{ env.PUBLIC_URL }}/health"
-            # Try the root endpoint
-            HTTP_CODE_ROOT=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${{ env.PUBLIC_URL }}" || echo "000")
-            echo "Root endpoint returned HTTP $HTTP_CODE_ROOT"
-            if [ "$HTTP_CODE_ROOT" != "200" ]; then
-              echo "Both health and root endpoints are failing"
-              exit 1
-            fi
+          sleep 30
+
+      - name: Health check
+        run: |
+          PUBLIC_URL="http://35.154.76.18"
+          echo "Checking health at $PUBLIC_URL/health"
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PUBLIC_URL/health" || echo "000")
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "Health check failed with status: $HTTP_STATUS"
+            exit 1
           fi
-          echo "Health check passed with HTTP $HTTP_CODE"
+          echo "Health check passed (HTTP $HTTP_STATUS)"
