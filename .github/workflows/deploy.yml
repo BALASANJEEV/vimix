@@ -1,0 +1,162 @@
+name: Build and Deploy to EC2 (Docker)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGION: ap-south-1
+  ECR_REGISTRY: 759204735992.dkr.ecr.ap-south-1.amazonaws.com
+  ECR_REPOSITORY: vimix
+  INSTANCE_ID: i-0196b28b7df4c15ec
+  PUBLIC_URL: http://3.7.110.41
+  CONTAINER_PORT: 5000
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: ap-south-1
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run build diagnostics
+        run: |
+          echo "Node version: $(node --version)"
+          echo "NPM version: $(npm --version)"
+          ls -la
+          ls -la node_modules || true
+          echo "Check package.json"
+          cat package.json | head -20
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: |
+          IMAGE_TAG="${{ github.sha }}"
+          docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -f Dockerfile \
+            .
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: Run container smoke test
+        run: |
+          docker run -d --name smoke-test -p 5000:5000 $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          sleep 3
+          docker ps
+          docker logs smoke-test
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000 || echo "000")
+          echo "Smoke test status code: $STATUS_CODE"
+          if [ "$STATUS_CODE" != "200" ]; then
+            echo "Application failed to start. Exit code: $STATUS_CODE"
+            exit 1
+          fi
+          docker stop smoke-test
+          docker rm smoke-test
+
+      - name: Setup AWS CLI and ECR login
+        run: |
+          aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+
+      - name: Push Docker image to ECR
+        run: |
+          IMAGE_TAG="${{ github.sha }}"
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Prepare SSM command for deployment
+        run: |
+          cat > /tmp/ssm-params.json << 'SSMJSON'
+          {
+            "commands": [
+              "aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 759204735992.dkr.ecr.ap-south-1.amazonaws.com",
+              "docker pull 759204735992.dkr.ecr.ap-south-1.amazonaws.com/vimix:latest",
+              "docker stop app || true",
+              "docker rm app || true",
+              "docker run -d --restart always -p 5000:5000 --name app 759204735992.dkr.ecr.ap-south-1.amazonaws.com/vimix:latest",
+              "sleep 3",
+              "docker ps",
+              "docker logs app"
+            ]
+          }
+          SSMJSON
+          cat /tmp/ssm-params.json
+
+      - name: Deploy to EC2 via SSM
+        run: |
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --region "$REGION" \
+            --document-name "AWS-RunShellScript" \
+            --parameters file:///tmp/ssm-params.json \
+            --query "Command.CommandId" \
+            --output text)
+          echo "SSM Command ID: $COMMAND_ID"
+          echo "COMMAND_ID=$COMMAND_ID" >> $GITHUB_ENV
+
+      - name: Wait for SSM command to complete
+        run: |
+          echo "Waiting for command $COMMAND_ID..."
+          for i in $(seq 1 30); do
+            STATUS=$(aws ssm list-command-invocations \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --region "$REGION" \
+              --query "CommandInvocations[0].Status" \
+              --output text)
+            echo "Status attempt $i: $STATUS"
+            if [ "$STATUS" = "Success" ]; then
+              echo "Deployment succeeded!"
+              aws ssm list-command-invocations \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$INSTANCE_ID" \
+                --region "$REGION" \
+                --details \
+                --query "CommandInvocations[0].CommandPlugins[0].Output" \
+                --output text
+              exit 0
+            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "Deployment failed with status $STATUS"
+              aws ssm list-command-invocations \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$INSTANCE_ID" \
+                --region "$REGION" \
+                --details \
+                --query "CommandInvocations[0].CommandPlugins[0].Output" \
+                --output text
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for SSM command"
+          exit 1
+
+      - name: Health check after deployment
+        run: |
+          echo "Waiting for application to be ready..."
+          for i in $(seq 1 12); do
+            STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://3.7.110.41:5000 || echo "000")
+            echo "Attempt $i: HTTP status $STATUS_CODE"
+            if [ "$STATUS_CODE" = "200" ]; then
+              echo "Health check passed!"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Health check failed - application did not return 200"
+          exit 1
